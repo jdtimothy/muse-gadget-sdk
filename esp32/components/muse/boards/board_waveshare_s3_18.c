@@ -38,8 +38,10 @@
  * through small internal DMA buffers (muse_lcd_bands.h), because the BSP's
  * own LVGL setup wants large internal buffers Wi-Fi and BLE can't spare.
  */
-#include "bsp/display.h"
+/* esp-bsp.h first: the BSP's display.h uses esp_err_t without including it. */
+#include "esp_err.h"
 #include "bsp/esp-bsp.h"
+#include "bsp/display.h"
 #include "bsp/touch.h"
 #include "driver/i2s_std.h"
 #include "esp_check.h"
