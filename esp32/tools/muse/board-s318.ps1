@@ -36,7 +36,10 @@ param(
     [ValidateSet('ports', 'backup', 'token', 'build', 'flash', 'monitor', 'flash-monitor', 'menuconfig', 'erase', 'clean')]
     [string]$Command,
     [string]$Port,
-    [int]$Baud = 460800
+    [int]$Baud = 460800,
+    # Re-download managed components and rebuild everything (needed only
+    # after building another board in this checkout).
+    [switch]$Fresh
 )
 
 $ErrorActionPreference = 'Stop'
@@ -140,8 +143,18 @@ switch ($Command) {
             Write-Warning "No SDK token in $Sdkconfig yet."
             Set-Token
         }
-        Clean-Managed
-        & idf.py @IdfArgs build
+        # managed_components/ is shared by every board. Wiping it forces a
+        # re-download and a full rebuild, so only do it when it was resolved
+        # for another board (or -Fresh).
+        $lock = 'dependencies.lock'
+        if ($Fresh -or ((Test-Path $lock) -and -not (Select-String -Quiet 'esp32_s3_touch_amoled_1_8' $lock))) {
+            Write-Host 'Components were resolved for another board: starting clean.'
+            Clean-Managed
+        }
+        # ccache (installed with ESP-IDF's tools) makes rebuilds of unchanged files nearly free.
+        $ccache = @()
+        if (Get-Command ccache -ErrorAction SilentlyContinue) { $ccache = @('--ccache') }
+        & idf.py @ccache @IdfArgs build
         if ($LASTEXITCODE) { throw "build failed" }
         Write-Host "Built $B\muse-gadget.bin"
     }
