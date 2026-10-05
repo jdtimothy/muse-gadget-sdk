@@ -22,6 +22,7 @@
   .\tools\muse\board-s318.ps1 ports            # list serial ports (no reset)
   .\tools\muse\board-s318.ps1 backup           # save the factory firmware first
   .\tools\muse\board-s318.ps1 token            # set your SDK token (hidden input)
+  .\tools\muse\board-s318.ps1 elevenlabs-key   # optional: speak replies (hidden input)
   .\tools\muse\board-s318.ps1 build
   .\tools\muse\board-s318.ps1 flash -Port COM5
   .\tools\muse\board-s318.ps1 monitor -Port COM5
@@ -29,11 +30,13 @@
 .NOTES
   The SDK token is written only to build-muse-waveshare-s3-18\sdkconfig, which
   git ignores. It is never printed. Set $env:MUSE_SDK_TOKEN to skip the prompt.
+  The ElevenLabs API key is kept the same way, and $env:ELEVENLABS_API_KEY
+  skips its prompt. An empty key turns spoken replies off again.
 #>
 [CmdletBinding()]
 param(
     [Parameter(Position = 0, Mandatory = $true)]
-    [ValidateSet('ports', 'backup', 'token', 'build', 'flash', 'monitor', 'flash-monitor', 'menuconfig', 'erase', 'clean')]
+    [ValidateSet('ports', 'backup', 'token', 'elevenlabs-key', 'build', 'flash', 'monitor', 'flash-monitor', 'menuconfig', 'erase', 'clean')]
     [string]$Command,
     [string]$Port,
     [int]$Baud = 460800,
@@ -108,6 +111,36 @@ function Set-Token {
     Write-Host ("Token set ({0}...{1}) in {2}" -f $tok.Substring(0, 5), $tok.Substring($tok.Length - 3), $Sdkconfig)
 }
 
+function Set-ElevenLabsKey {
+    if (-not (Test-Path $Sdkconfig)) {
+        Write-Host "Generating $Sdkconfig ..."
+        & idf.py @IdfArgs reconfigure | Out-Null
+        if ($LASTEXITCODE) { throw "reconfigure failed" }
+    }
+    $key = $env:ELEVENLABS_API_KEY
+    if ($null -eq $key) {
+        $sec = Read-Host -AsSecureString 'ElevenLabs API key (hidden; empty turns speech off)'
+        $key = [Runtime.InteropServices.Marshal]::PtrToStringBSTR(
+            [Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec))
+    }
+    $key = $key.Trim()
+    if ($key -and $key -notmatch '^[A-Za-z0-9_-]+$') { throw "That doesn't look like an ElevenLabs API key." }
+    $lines = Get-Content $Sdkconfig
+    $line = "CONFIG_MUSE_TTS_ELEVENLABS_API_KEY=`"$key`""
+    if ($lines -match '^CONFIG_MUSE_TTS_ELEVENLABS_API_KEY=') {
+        $lines = $lines -replace '^CONFIG_MUSE_TTS_ELEVENLABS_API_KEY=.*$', $line
+    } else {
+        $lines += $line
+    }
+    # UTF-8 without BOM and LF endings, as Kconfig writes it.
+    [IO.File]::WriteAllText((Resolve-Path $Sdkconfig), (($lines -join "`n") + "`n"), (New-Object Text.UTF8Encoding $false))
+    if ($key) {
+        Write-Host "ElevenLabs key set in $Sdkconfig. Build and flash to hear replies."
+    } else {
+        Write-Host "ElevenLabs key cleared in $Sdkconfig; replies will only be shown."
+    }
+}
+
 function Has-Token {
     (Test-Path $Sdkconfig) -and ((Get-Content $Sdkconfig) -match '^CONFIG_GADGET_SDK_TOKEN="mgst_')
 }
@@ -136,6 +169,7 @@ switch ($Command) {
         Write-Host "Saved $out. To restore Waveshare's firmware: python -m esptool --chip $Target -p $p write-flash 0 $out"
     }
     'token' { Need-Idf; Set-Token }
+    'elevenlabs-key' { Need-Idf; Set-ElevenLabsKey }
     'menuconfig' { Need-Idf; & idf.py @IdfArgs menuconfig }
     'build' {
         Need-Idf

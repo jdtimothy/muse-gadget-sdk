@@ -26,8 +26,9 @@
  *   2. POST /chat/stream with the transcript. The reply arrives as events on
  *      the connection's long-lived POST /chat/subscribe stream: one or more
  *      assistant messages, each delta.message_start / text_append / message_done.
- *   3. Each finished message is shown at reading pace (see start_tts to
- *      speak it with a TTS API of your own; Muse doesn't speak gadget replies).
+ *   3. Each finished message is spoken through ElevenLabs when a key is set
+ *      (see start_tts; Muse doesn't speak gadget replies), or else shown at
+ *      reading pace.
  * A turn has no explicit end event; like Sidekick, it settles once every
  * message is done and nothing has arrived for a few seconds.
  *
@@ -69,6 +70,7 @@ extern "C" {
 #include "muse_account_api.h"
 #include "muse_link.h"
 #include "muse_settings.h"
+#include "muse_tts_elevenlabs.h"
 #include "muse_wifi.h"
 }
 #include "muse_chat_priv.h"
@@ -244,6 +246,7 @@ struct turn_t {
     resampler_t down;
     int kbps;
     int down_rate;
+    uint32_t tts_job;        /* ElevenLabs fetch for tts_msg (muse_tts_elevenlabs.h), or 0 */
 };
 
 /* 10 KB, most of it the MP3 decoder: in PSRAM on boards that let static data go
@@ -959,6 +962,10 @@ static void turn_finish(void)
     s_turn.tts_msg = -1;
     s_turn.silent = false;
     s_turn.mp3_len = 0;
+    if (s_turn.tts_job) {
+        muse_tts_cancel();
+        s_turn.tts_job = 0;
+    }
 }
 
 static void turn_fail(const char *why)
@@ -1501,6 +1508,25 @@ static void on_chat_ack(stream_t *s)
 
 /* ---- Turn: speech ---- */
 
+/* Shows message i at reading pace: silence in place of speech paces the captions and ends the turn. */
+static void show_silently(msg_t &m, int i)
+{
+    m.pcm_start = s_turn.pcm_out;
+    m.pcm_frames = (uint32_t)(m.len * MIC_RATE / TEXT_CHARS_PER_S);
+    m.tts = TTS_ACTIVE;
+    s_turn.tts_msg = i;
+    s_turn.silent = true;
+    ESP_LOGI(TAG, "showing message %s (%u chars)", m.id, (unsigned)m.len);
+    show_reply_start(m);
+}
+
+/*
+ * Replies are text. With an ElevenLabs key set and the speaker on, each one is
+ * spoken: its text (s_turn.texts, up to TEXT_MAX - 1 bytes of it) goes to
+ * ElevenLabs, pump_speech() moves the MP3 into s_turn.mp3 as it streams in,
+ * and decode() plays it at the speaker's volume, captions following, and
+ * finishes the message once it's drained. Otherwise it's shown silently.
+ */
 static void start_tts(void)
 {
     if (s_turn.tts_msg >= 0) {
@@ -1511,28 +1537,56 @@ static void start_tts(void)
         if (m.tts != TTS_QUEUED) {
             continue;
         }
-        /*
-         * Replies are text, shown at reading pace: silence in place of speech
-         * paces the captions and ends the turn. To speak them instead, send
-         * the message's text (s_turn.texts + i * TEXT_MAX, if texts was
-         * allocated; up to TEXT_MAX - 1 bytes) to a TTS API of your choice and
-         * play the MP3 it returns. In place of the silence below: keep
-         * m.tts = TTS_ACTIVE and s_turn.tts_msg = i, set s_turn.silent = false,
-         * m.pcm_start = s_turn.pcm_out, m.pcm_frames = 0, s_turn.mp3_len = 0,
-         * s_turn.mp3_ended = false, s_turn.kbps = 0, s_turn.down_rate = 0 and
-         * mp3dec_init(&s_turn.dec). Then, on this task, pass the MP3 to
-         * tts_data() as it arrives (it buffers up to MP3_BUF and drops the
-         * rest, so hold off while it's full) and set s_turn.mp3_ended at the
-         * end. decode() plays it at the speaker's volume, captions following,
-         * and finishes the message once it's drained.
-         */
-        m.pcm_start = s_turn.pcm_out;
-        m.pcm_frames = (uint32_t)(m.len * MIC_RATE / TEXT_CHARS_PER_S);
+        if (!s_turn.texts || !muse_tts_enabled() || !muse_settings_speaker_on()) {
+            show_silently(m, i);
+            return;
+        }
+        const char *text = s_turn.texts + i * TEXT_MAX;
+        uint32_t job = muse_tts_start(text, strnlen(text, TEXT_MAX - 1));
+        if (!job) {
+            return;   /* the last fetch is still stopping: try on the next pass */
+        }
+        s_turn.tts_job = job;
         m.tts = TTS_ACTIVE;
         s_turn.tts_msg = i;
-        s_turn.silent = true;
-        ESP_LOGI(TAG, "showing message %s (%u chars)", m.id, (unsigned)m.len);
+        s_turn.silent = false;
+        m.pcm_start = s_turn.pcm_out;
+        m.pcm_frames = 0;
+        s_turn.mp3_len = 0;
+        s_turn.mp3_ended = false;
+        s_turn.kbps = 0;
+        s_turn.down_rate = 0;
+        mp3dec_init(&s_turn.dec);
+        ESP_LOGI(TAG, "speaking message %s (%u chars)", m.id, (unsigned)m.len);
         show_reply_start(m);
+        return;
+    }
+}
+
+/* Moves ElevenLabs' MP3 into the turn's buffer while it has room. */
+static void pump_speech(void)
+{
+    if (s_turn.tts_msg < 0 || s_turn.silent || !s_turn.tts_job) {
+        return;
+    }
+    while (s_turn.mp3_len < MP3_BUF) {
+        bool ended, ok;
+        size_t n = muse_tts_read(s_turn.tts_job, s_turn.mp3 + s_turn.mp3_len, MP3_BUF - s_turn.mp3_len, &ended, &ok);
+        if (n) {
+            mark(M_MP3);
+            s_turn.mp3_len += n;
+            continue;
+        }
+        if (ended) {
+            s_turn.tts_job = 0;
+            msg_t &m = s_turn.msgs[s_turn.tts_msg];
+            if (!ok && s_turn.pcm_out == m.pcm_start && !s_turn.mp3_len) {
+                ESP_LOGW(TAG, "no speech for message %s", m.id);
+                show_silently(m, s_turn.tts_msg);
+            } else {
+                s_turn.mp3_ended = true;   /* decode() plays what came, then finishes */
+            }
+        }
         return;
     }
 }
@@ -1985,6 +2039,7 @@ static void hatch_task(void *arg)
         }
         if (s_turn.phase == P_WAIT_REPLY) {
             start_tts();
+            pump_speech();
             decode();
         }
         if (!s_connected) {
@@ -2057,6 +2112,7 @@ extern "C" void muse_hatch_start(void)
         s.cap = NDJSON_LINE_MAX;
     }
     s_turn.tts_msg = -1;
+    muse_tts_init();   /* spoken replies, with an ElevenLabs key set */
     /* Stack in PSRAM: TLS, Noise and the MP3 decoder (~16 KB of scratch) all run here. */
     if (!s_cmds || !s_events || !s_in || !s_out || !s_turn.chunk || !s_turn.mp3 || (VOICE_NOTE && !s_turn.note) || !s_pcm || !s_pcm16 ||
         xTaskCreatePinnedToCoreWithCaps(hatch_task, "muse_chat", 48 * 1024, nullptr, 5, nullptr, 0,
