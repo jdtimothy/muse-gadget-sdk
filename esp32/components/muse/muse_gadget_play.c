@@ -47,6 +47,8 @@
 #define MP3S_HOLD (1441 + 4)                                /* as the reply's: the largest frame and the next header */
 #define MP3S_OUT_MAX (MINIMP3_MAX_SAMPLES_PER_FRAME + 8)    /* PCM frames one MP3 frame can make */
 #define SPEECH_CHARS_PER_S 14                               /* as the reply's, until the speech's length is known */
+#define TEXT_CHARS_PER_S 16                                 /* muted: a muted reply's reading pace */
+#define READ_HOLD_FRAMES (2 * PLAY_RATE)                    /* and how long its last lines stay up */
 #define PLAY_TAU 6.2831853f
 
 /* The reply path's linear resampler (muse_chat_session.cpp), copied so Meta's file stays as it is. */
@@ -149,6 +151,13 @@ static size_t speech_pos(uint32_t played, uint32_t total, size_t len)
     uint32_t frames = total ? total : (uint32_t)(len * PLAY_RATE / SPEECH_CHARS_PER_S);
     size_t at = frames ? (size_t)((uint64_t)played * len / frames) : 0;
     return at < len ? at : len ? len - 1 : 0;
+}
+
+/* How long a `len`-byte text stays up when it's read, not heard: at a muted
+ * reply's pace (show_silently in muse_chat_session.cpp), then its last lines held. */
+static uint32_t reading_frames(size_t len)
+{
+    return (uint32_t)(len * PLAY_RATE / TEXT_CHARS_PER_S) + READ_HOLD_FRAMES;
 }
 
 /*
@@ -557,6 +566,25 @@ static void show_page(const char *text, uint32_t played, uint32_t total)
     }
 }
 
+/*
+ * Muted, or speech that couldn't be fetched: the text read as a muted reply
+ * is, Muse small at the top (the speaking mode, with the speaker off), the
+ * pages turning at reading pace. True if a talk press cut it off.
+ */
+static bool read_out(const char *text, QueueHandle_t presses)
+{
+    uint32_t total = reading_frames(strlen(text));
+    uint32_t reading = total - READ_HOLD_FRAMES;
+    muse_state_set_mode(MUSE_MODE_SPEAKING);
+    for (uint32_t at = 0; at < total; at += PLAY_RATE / 50) {   /* 20 ms a step */
+        show_page(text, at < reading ? at : reading, reading);
+        if (hold(presses, 20)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /* Waits for the player to finish the last job (a clip's read can take a while
  * to give up), frees it and drops its PCM. True if a talk press came first. */
 static bool player_idle(QueueHandle_t presses)
@@ -581,12 +609,10 @@ static bool play_one(job_t *job, QueueHandle_t presses)
     bool shown = say && job->caption;
     muse_state_set_asleep(false);   /* to be seen; it sleeps again on its own timer */
     if (!muse_settings_speaker_on()) {
-        /* Muted: speech is shown, not said; other sounds are dropped. */
-        if (shown) {
-            show_page(job->arg, 0, 0);
-        }
+        /* Muted: speech is read, not said; other sounds are dropped. */
+        bool cut = shown && read_out(job->arg, presses);
         free(job);
-        return shown && hold(presses, NOTICE_MS);
+        return cut;
     }
     if (player_idle(presses)) {
         free(job);
@@ -660,8 +686,7 @@ static bool play_one(job_t *job, QueueHandle_t presses)
     if (hold(presses, NOTICE_MS / 2)) {
         return true;
     }
-    show_page(job->arg, 0, 0);
-    return hold(presses, NOTICE_MS);
+    return read_out(job->arg, presses);
 }
 
 /* ---- Public ---- */

@@ -112,6 +112,16 @@ static void test_speech_pos(void)
     CHECK(speech_pos(5, 0, 0) == 0);
 }
 
+/* Muted: a text is read at a muted reply's pace, then its last lines stay up. */
+static void test_reading_frames(void)
+{
+    CHECK(reading_frames(0) == READ_HOLD_FRAMES);
+    CHECK(reading_frames(160) == 10 * PLAY_RATE + READ_HOLD_FRAMES);   /* 16 characters a second */
+    CHECK(READ_HOLD_FRAMES == 2 * PLAY_RATE);
+    /* The last frame of reading lands on the last page. */
+    CHECK(speech_pos(reading_frames(600) - READ_HOLD_FRAMES, reading_frames(600) - READ_HOLD_FRAMES, 600) == 599);
+}
+
 /* Feeds mp3 to a stream in pieces of 1-997 bytes (seed 0: as much as fits) and
  * collects the PCM. Exits if the stream never says it's done. */
 static int16_t *decode_all(const uint8_t *mp3, size_t len, unsigned seed, size_t *frames)
@@ -246,6 +256,7 @@ int main(int argc, char **argv)
     test_chimes();
     test_url_host();
     test_speech_pos();
+    test_reading_frames();
     test_mp3_stream(mp3, len);
     if (failures) {
         fprintf(stderr, "%d check(s) failed\n", failures);
