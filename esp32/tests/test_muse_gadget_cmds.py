@@ -56,6 +56,41 @@ class MuseGadgetCmdsHarnessTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
+PLAY = ROOT / "components/muse/muse_gadget_play.c"
+MINIMP3 = ROOT / "components/minimp3"
+
+
+class MuseGadgetPlayHarnessTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.temp = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(cls.temp.cleanup)
+        out = Path(cls.temp.name)
+        source = PLAY.read_text()
+        start = source.index("/* ---- Pure (host-tested)")
+        (out / "play_pure.inc").write_text(source[start:source.index("/* ---- Device", start)])
+        cc = shlex.split(os.environ.get("CC", "cc"))
+        inc = ["-I", str(out), "-I", str(ROOT / "components/muse"), "-I", str(MINIMP3 / "include")]
+        commands = [
+            # Third-party: built as the firmware builds it, warnings off.
+            [*cc, "-std=c11", "-O2", "-w", *inc, "-c", str(MINIMP3 / "src/minimp3.c"),
+             "-o", str(out / "minimp3.o")],
+            [*cc, "-std=c11", "-Wall", "-Wextra", "-Werror", "-D_DEFAULT_SOURCE", *inc,
+             str(ROOT / "tests/muse_gadget_play_harness.c"), str(out / "minimp3.o"), "-lm",
+             "-o", str(out / "play")],
+        ]
+        for cmd in commands:
+            compiled = subprocess.run(cmd, capture_output=True, text=True)
+            if compiled.returncode:
+                raise AssertionError(compiled.stdout + compiled.stderr)
+        cls.out = out
+
+    def test_harness(self):
+        mp3 = ROOT / "components/muse/test_reply.mp3"
+        result = subprocess.run([str(self.out / "play"), str(mp3)], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+
 class MuseGadgetCmdsSourceTest(unittest.TestCase):
     """Source checks: they need no compiler."""
 
