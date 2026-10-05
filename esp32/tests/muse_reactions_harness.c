@@ -130,9 +130,26 @@ static void test_table(void)
     }
 }
 
+/* Gallery review: the sun's rays go all the way round, in the same places every frame. */
+static void test_sun_rays_ring_the_sun(void)
+{
+    avatar_t j = { .cx = 32, .cy = 33.5f, .a = 16, .b = 23 };
+    int sx = iround(j.cx + 19), sy = iround(j.cy - j.b + 1);
+    static const int8_t RAYS[8][2] = { { 5, 0 }, { 4, 4 }, { 0, 5 }, { -4, 4 }, { -5, 0 }, { -4, -4 }, { 0, -5 }, { 4, -4 } };
+    for (float t = 0; t < 3.0f; t += 0.13f) {
+        memset(s_fb, C_BG, sizeof(s_fb));
+        muse_pose_t p = { .mode = MUSE_MODE_IDLE, .t = t, .reaction = MUSE_REACT_SUNNY, .react_amount = 1 };
+        prop_sun(&j, &p, 1.0f);
+        for (int k = 0; k < 8; k++) {
+            CHECK(get_px(sx + RAYS[k][0], sy + RAYS[k][1]) == C_SUN, "ray %d missing at t=%.2f", k, t);
+        }
+    }
+}
+
 int main(void)
 {
     test_table();
+    test_sun_rays_ring_the_sun();
     test_each_reaction_shows();
     test_some_modes_ignore_reactions();
     test_speech_keeps_its_mouth();

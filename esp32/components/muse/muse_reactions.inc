@@ -165,15 +165,21 @@ static void prop_steam(const avatar_t *j, const muse_pose_t *p, float a)
 
 static void prop_zzz(const avatar_t *j, const muse_pose_t *p, float a)
 {
-    static const char *const BIG[] = { "####", "..#.", ".#..", "####" };
-    static const char *const SMALL[] = { "###", ".#.", "###" };
-    for (int i = 0; i < 3; i++) {
-        float ph = fracf(p->react_t * 0.35f + i / 3.0f);
-        int x = iround(j->cx + 12 + ph * 8), y = iround(head_top(j) + 4 - ph * 11);
-        if (ph > 0.5f) {
-            fstamp(BIG, 4, x, y, C_ACC, C_ACC, a * (1.2f - ph));
+    /* A z needs room for its diagonal: 4 and 5 pixels, never 3 (that reads as an I). */
+    static const char *const BIG[] = { "#####", "...#.", "..#..", ".#...", "#####" };
+    static const char *const SMALL[] = { "####", "..#.", ".#..", "####" };
+    /* Two, half a cycle apart so they never overlap, drifting up and out and
+     * growing as they go. Not dithered out: a broken diagonal stops reading as a z. */
+    for (int i = 0; i < 2; i++) {
+        float ph = fracf(p->react_t * 0.4f + i * 0.5f);
+        if (ph > 0.9f) {
+            continue;
+        }
+        int x = iround(j->cx + 11 + ph * 10), y = iround(head_top(j) + 4 - ph * 14);
+        if (ph > 0.45f) {
+            fstamp(BIG, 5, x, y, C_ACC, C_ACC, a);
         } else {
-            fstamp(SMALL, 3, x, y, C_ACC, C_ACC, a);
+            fstamp(SMALL, 4, x, y, C_ACC, C_ACC, a);
         }
     }
 }
@@ -228,12 +234,16 @@ static void prop_sun(const avatar_t *j, const muse_pose_t *p, float a)
             }
         }
     }
+    /* Eight rays all the way round, where they stay; the straight and the
+     * diagonal ones take turns reaching out a pixel further, so the sun glows. */
+    static const int8_t RAYS[8][2] = { { 1, 0 }, { 1, 1 }, { 0, 1 }, { -1, 1 }, { -1, 0 }, { -1, -1 }, { 0, -1 }, { 1, -1 } };
+    bool straight_long = sinf(p->t * 3.0f) > 0;
     for (int k = 0; k < 8; k++) {
-        float ang = p->t * 1.2f + k * TAU / 8;
-        if (0.5f + 0.5f * sinf(p->t * 4.0f + k) > 0.3f) {
-            for (int r = 5; r <= 6; r++) {
-                fpx(iround(cx + cosf(ang) * r), iround(cy + sinf(ang) * r), C_SUN, a);
-            }
+        bool diagonal = k & 1;
+        int from = diagonal ? 4 : 5;   /* a diagonal step is longer: start it a step in */
+        int len = diagonal != straight_long ? 2 : 1;
+        for (int r = from; r < from + len; r++) {
+            fpx(cx + RAYS[k][0] * r, cy + RAYS[k][1] * r, C_SUN, a);
         }
     }
 }
