@@ -3,10 +3,11 @@ name: gadget-muse-s318
 description: >-
   Use the user's Muse Gadget, a desk companion on a Waveshare ESP32-S3 1.8" AMOLED
   running the Muse Gadget SDK: read or change its volume, mute, brightness and screen
-  sleep, report its battery, switch the voice it speaks in, show reactions on its avatar, make it say things aloud,
+  sleep, report its battery, switch the voice it speaks in, show reactions on its avatar, offer reply buttons on its screen, make it say things aloud,
   play sound clips and chimes, show a picture on its screen, and scan the home
   network through it. Also use it for every push-to-talk voice note from the
-  gadget: a message with no text and one attachment named voice_note.wav.
+  gadget (a message with no text and one attachment named voice_note.wav) and
+  every message ending in [tapped on the gadget].
 ---
 
 # Muse Gadget (s318)
@@ -23,6 +24,11 @@ A push-to-talk voice note from the gadget reaches you as a message with no text
 and one audio attachment named `voice_note.wav`. Treat every such message as the
 user talking to you through the gadget, even when they don't mention it: your
 reply will be spoken by the gadget in its voice, with its avatar on screen.
+
+A message ending in `[tapped on the gadget]` is the user tapping one of the
+reply buttons you offered with `display.options`: the words before the tag are
+their reply. Treat it exactly like a voice note (your answer is spoken by the
+gadget; react if it fits; offer new buttons if they fit). Don't repeat the tag.
 
 On those turns, before you write your reply:
 
@@ -101,8 +107,9 @@ any reply it's in the middle of. A press of its talk button cuts it off.
 
 ### audio.chime
 
-Plays a built-in sound: `ding`, `success`, `error`, `alert`, `timer` or `tada`.
-Queued like `voice.say`.
+Plays a built-in sound: `ding`, `success`, `error`, `alert`, `timer`, `tada` or
+`choose` (the "your turn" sound reply buttons play by themselves). Queued like
+`voice.say`.
 
 - `success` or `error` after an action the user asked for, if a sound fits.
 - `timer` when a countdown the user set is up.
@@ -142,6 +149,22 @@ reply.
 - Don't narrate the reaction ("I'm showing an umbrella"), and don't react on
   the user's behalf to something they didn't share.
 
+### display.options
+
+Shows 2-4 reply buttons on the gadget's screen once your spoken reply ends,
+with a short chime. `options` is a list of 2-4 labels, 1-24 characters each,
+worded as the user's reply ("Yes, play it", "Tell me more", "No thanks"). A tap
+sends that label to you as the user's next message, tagged
+`[tapped on the gadget]`, and your answer is spoken. The buttons go when tapped,
+when the user presses talk, or after 30 seconds. A new call replaces them.
+
+- Offer them when your reply ends in a question with a few natural answers, a
+  short choice, a confirmation, or a quiz. Most replies need none.
+- On a voice note or a tapped message, call it before you finish your reply:
+  the buttons wait until the speech is over.
+- Keep labels short and distinct; don't offer "Other" or "Something else": the
+  user can always just press talk.
+
 ### device.health
 
 Basic health, including the battery. For a plain battery question, prefer
@@ -175,3 +198,4 @@ Scans the home network (it can take up to 90 s) for devices Home Link can reach.
   stops them.
 - Reactions are the 21 above; it can't show arbitrary images as reactions (use
   `display.draw_url` for a picture).
+- Reply buttons hold 2-4 labels of up to 24 characters; longer ones are refused.
