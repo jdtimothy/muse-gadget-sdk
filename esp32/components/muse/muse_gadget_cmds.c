@@ -46,6 +46,7 @@
 #include "cJSON.h"
 #include "muse_gadget_sound.h"
 #include "muse_reactions.h"
+#include "muse_reply_options.h"
 
 /* ---- Pure (host-tested) ---- */
 
@@ -725,6 +726,78 @@ static cJSON *react_result(int id, int secs)
     if (id != MUSE_REACT_NONE) {
         cJSON_AddNumberToObject(p, "seconds", secs);
     }
+    return result;
+}
+
+/*
+ * Checks display.options' {options: [2-4 labels]} into labels: each 1-24
+ * bytes, not all spaces, no control characters. A bad or unknown parameter is
+ * refused, saying why in err.
+ */
+static bool parse_options(const cJSON *params, char labels[][MUSE_OPTIONS_LABEL_MAX + 1], int *n, char *err,
+                          size_t cap)
+{
+    *n = 0;
+    const cJSON *list = NULL;
+    if (cJSON_IsObject(params)) {
+        const cJSON *v;
+        cJSON_ArrayForEach(v, params) {
+            if (strcmp(v->string, "options")) {
+                char name[41];
+                snprintf(name, sizeof(name), "%.40s", v->string);
+                utf8_trim(name);
+                snprintf(err, cap, "unknown parameter %s: use options", name);
+                return false;
+            }
+            list = v;
+        }
+    }
+    if (!list) {
+        snprintf(err, cap, "options is required: %d to %d short replies", MUSE_OPTIONS_MIN, MUSE_OPTIONS_MAX);
+        return false;
+    }
+    if (!cJSON_IsArray(list)) {
+        snprintf(err, cap, "options must be a list of %d to %d strings", MUSE_OPTIONS_MIN, MUSE_OPTIONS_MAX);
+        return false;
+    }
+    int count = cJSON_GetArraySize(list);
+    if (count < MUSE_OPTIONS_MIN || count > MUSE_OPTIONS_MAX) {
+        snprintf(err, cap, "options takes %d to %d replies", MUSE_OPTIONS_MIN, MUSE_OPTIONS_MAX);
+        return false;
+    }
+    const cJSON *item;
+    cJSON_ArrayForEach(item, list) {
+        if (!cJSON_IsString(item)) {
+            snprintf(err, cap, "each option must be a string");
+            return false;
+        }
+        const char *s = item->valuestring;
+        size_t len = strlen(s);
+        bool blank = true;
+        for (size_t i = 0; i < len; i++) {
+            unsigned char c = (unsigned char)s[i];
+            if (c < ' ' || c == 0x7f) {
+                snprintf(err, cap, "an option can't hold control characters or line breaks");
+                return false;
+            }
+            blank = blank && c == ' ';
+        }
+        if (!len || blank || len > MUSE_OPTIONS_LABEL_MAX) {
+            snprintf(err, cap, "each option must be 1 to %d characters", MUSE_OPTIONS_LABEL_MAX);
+            return false;
+        }
+        memcpy(labels[*n], s, len + 1);
+        (*n)++;
+    }
+    return true;
+}
+
+/* display.options' answer: how many buttons there will be. */
+static cJSON *options_result(int n)
+{
+    cJSON *p;
+    cJSON *result = gadget_ok(&p);
+    cJSON_AddNumberToObject(p, "shown", n);
     return result;
 }
 

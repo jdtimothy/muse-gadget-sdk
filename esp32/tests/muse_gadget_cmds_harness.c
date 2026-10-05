@@ -25,6 +25,7 @@
 #include "cJSON.h"
 #include "muse_gadget_sound.h"
 #include "muse_reactions.h"
+#include "muse_reply_options.h"
 #include "gadget_pure.inc"
 
 static int failures;
@@ -438,7 +439,7 @@ static void test_parse_chime(void)
 
 static void test_chime_names(void)
 {
-    CHECK(MUSE_CHIME_COUNT == 6);
+    CHECK(MUSE_CHIME_COUNT == 7);
     for (int i = 0; i < MUSE_CHIME_COUNT; i++) {
         CHECK(strstr(MUSE_CHIME_NAMES, MUSE_CHIMES[i].name) != NULL);
         CHECK(muse_chime_find(MUSE_CHIMES[i].name) == i);
@@ -589,6 +590,62 @@ static void test_react_result(void)
     cJSON_Delete(r);
 }
 
+/* parse_options on parsed JSON. */
+static bool options(const char *json, char labels[][MUSE_OPTIONS_LABEL_MAX + 1], int *n, char *err)
+{
+    cJSON *p = NULL;
+    if (json) {
+        p = cJSON_Parse(json);
+        if (!p) {
+            fprintf(stderr, "bad test JSON: %s\n", json);
+            exit(2);
+        }
+    }
+    err[0] = '\0';
+    bool ok = parse_options(p, labels, n, err, 160);
+    cJSON_Delete(p);
+    return ok;
+}
+
+/* Review focus 3: what Muse might send. */
+static void test_parse_options(void)
+{
+    char l[MUSE_OPTIONS_MAX][MUSE_OPTIONS_LABEL_MAX + 1];
+    int n;
+    char err[160];
+    CHECK(options("{\"options\":[\"Yes, play it\",\"No thanks\"]}", l, &n, err) && n == 2 &&
+          !strcmp(l[0], "Yes, play it") && !strcmp(l[1], "No thanks"));
+    CHECK(options("{\"options\":[\"a\",\"b\",\"c\",\"d\"]}", l, &n, err) && n == 4 && !strcmp(l[3], "d"));
+    CHECK(options("{\"options\":[\"123456789012345678901234\",\"x\"]}", l, &n, err) && strlen(l[0]) == 24);
+    CHECK(options("{\"options\":[\"Caf\xC3\xA9 au lait\",\"Th\xC3\xA9\"]}", l, &n, err) &&
+          !strcmp(l[0], "Caf\xC3\xA9 au lait"));
+    CHECK(!options("{\"options\":[\"1234567890123456789012345\",\"x\"]}", l, &n, err) && strstr(err, "24"));
+    CHECK(!options("{\"options\":[\"only one\"]}", l, &n, err) && strstr(err, "2"));
+    CHECK(!options("{\"options\":[\"a\",\"b\",\"c\",\"d\",\"e\"]}", l, &n, err) && strstr(err, "4"));
+    CHECK(!options("{\"options\":[\"a\",\"\"]}", l, &n, err));
+    CHECK(!options("{\"options\":[\"a\",\"   \"]}", l, &n, err));
+    CHECK(!options("{\"options\":[\"a\",\"two\\nlines\"]}", l, &n, err));
+    CHECK(!options("{\"options\":[\"a\",5]}", l, &n, err) && strstr(err, "string"));
+    CHECK(!options("{\"options\":\"a, b\"}", l, &n, err) && strstr(err, "list"));
+    CHECK(!options("{}", l, &n, err) && strstr(err, "options"));
+    CHECK(!options(NULL, l, &n, err) && strstr(err, "options"));
+    /* A misspelled or unknown parameter is refused, not ignored. */
+    CHECK(!options("{\"options\":[\"a\",\"b\"],\"seconds\":60}", l, &n, err) && strstr(err, "seconds"));
+}
+
+static void test_options_message(void)
+{
+    char out[MUSE_OPTIONS_MSG_MAX];
+    muse_options_message(out, sizeof(out), "Tell me more");
+    CHECK(!strcmp(out, "Tell me more [tapped on the gadget]"));
+    muse_options_message(out, sizeof(out), "123456789012345678901234");
+    CHECK(strlen(out) == 24 + strlen(MUSE_OPTIONS_TAG));   /* the longest label still fits */
+    cJSON *r = options_result(3);
+    CHECK(cJSON_IsTrue(cJSON_GetObjectItem(r, "ok")));
+    CHECK(cJSON_GetObjectItem(cJSON_GetObjectItem(r, "payload"), "shown")->valueint == 3);
+    cJSON_Delete(r);
+}
+
 int main(void)
 {
     test_parse_settings();
@@ -612,6 +669,8 @@ int main(void)
     test_reaction_names();
     test_reaction_amount();
     test_react_result();
+    test_parse_options();
+    test_options_message();
     if (failures) {
         fprintf(stderr, "%d check(s) failed\n", failures);
         return 1;
