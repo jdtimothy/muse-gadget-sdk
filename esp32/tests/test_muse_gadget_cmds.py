@@ -122,7 +122,7 @@ class MuseGadgetCmdsSourceTest(unittest.TestCase):
         start = source.index("void muse_gadget_add_commands(")
         body = source[start:source.index("\n}\n", start)]
         text = "".join(re.findall(r'"((?:[^"\\]|\\.)*)"', body))
-        self.assertLess(len(text), 1000, text)
+        self.assertLess(len(text), 1600, text)
 
     def test_player_is_built(self):
         cmake = (ROOT / "components/muse/CMakeLists.txt").read_text()
@@ -159,11 +159,27 @@ class MuseGadgetCmdsSourceTest(unittest.TestCase):
             for call in re.findall(r"ESP_LOG\w\(.*?\);", source, re.S):
                 self.assertNotIn("API_KEY", call, f"{path}: {call}")
 
-    def test_voice_select_needs_spoken_replies(self):
+    def test_voice_and_sound_commands_need_spoken_replies(self):
         source = SOURCE.read_text()
         add = source[source.index("void muse_gadget_add_commands("):]
         block = add[add.index("#if CONFIG_MUSE_HATCH"):]
-        self.assertIn('"voice.select"', block[:block.index("#endif")])
+        block = block[:block.index("#endif")]
+        for name in ("voice.select", "voice.say", "audio.play_url", "audio.chime"):
+            self.assertIn(f'"{name}"', block)
+
+    def test_sound_commands_are_dispatched(self):
+        source = SOURCE.read_text()
+        body = source[source.index("cJSON *muse_gadget_command("):]
+        body = body[:body.index("\n}\n")]
+        self.assertIn("sound_command(command, params)", body)
+        for name in ("voice.say", "audio.play_url", "audio.chime"):
+            self.assertIn(f'"{name}"', body)
+
+    def test_new_voice_says_hello(self):
+        source = SOURCE.read_text()
+        select = source[source.index("static cJSON *voice_select("):source.index("static void voice_task(")]
+        self.assertIn("hello_text(", select)
+        self.assertIn("muse_play_enqueue(MUSE_SOUND_SAY", select)
 
     def test_voices_come_from_the_saved_voice(self):
         tts = (ROOT / "components/muse/muse_tts_elevenlabs.c").read_text()

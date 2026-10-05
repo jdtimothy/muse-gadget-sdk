@@ -20,6 +20,10 @@
  *   device.settings  read or change volume, mute, brightness and screen
  *                    sleep; reports them with the battery and voice
  *   voice.select     list the ElevenLabs voices, or switch to one (async)
+ *   voice.say        say text aloud, captioned
+ *   audio.play_url   play an MP3 clip
+ *   audio.chime      play a built-in chime
+ *                    (all three queued for muse_gadget_play.c)
  * skills/gadget-muse-s318/SKILL.md tells Muse when to use each.
  *
  * Everything from "Pure (host-tested)" to "Device" builds on the host
@@ -643,6 +647,7 @@ static void hello_text(char *out, size_t cap, const char *name)
 #include "freertos/idf_additions.h"
 #include "freertos/task.h"
 #if CONFIG_MUSE_HATCH
+#include "muse_gadget_play.h"
 #include "muse_tts_elevenlabs.h"
 #endif
 
@@ -753,6 +758,11 @@ static cJSON *voice_select(const char *name)
             result = gadget_error("internal", "couldn't save the voice");
         } else {
             result = selected_result(&v[i]);
+            if (muse_settings_speaker_on()) {
+                char hello[80];
+                hello_text(hello, sizeof(hello), v[i].name);
+                muse_play_enqueue(MUSE_SOUND_SAY, hello, true);   /* plays once any reply is done */
+            }
         }
     }
     free(v);
@@ -803,6 +813,26 @@ static cJSON *voice_select_start(const cJSON *params, const char *request_id,
     cJSON_AddBoolToObject(async, "_async", true);
     return async;
 }
+
+/* voice.say, audio.play_url and audio.chime: queued for the voice task to play when idle. */
+static cJSON *sound_command(const char *command, const cJSON *params)
+{
+    gadget_sound_t s;
+    char err[160];
+    if (!parse_sound(command, params, &s, err, sizeof(err))) {
+        return gadget_error("invalid_params", err);
+    }
+    if (s.kind == MUSE_SOUND_SAY && !muse_tts_enabled()) {
+        return gadget_error("unavailable", "speech is off: no ElevenLabs key is set on the gadget");
+    }
+    if (!muse_settings_speaker_on()) {
+        if (s.kind == MUSE_SOUND_SAY && s.caption) {
+            muse_play_enqueue(s.kind, s.arg, true);   /* shown, not said */
+        }
+        return muted_error(s.kind, s.caption);
+    }
+    return sound_result(muse_play_enqueue(s.kind, s.arg, s.caption));
+}
 #endif
 
 static cJSON *param(const char *type, const char *description)
@@ -816,14 +846,22 @@ static cJSON *param(const char *type, const char *description)
 /* As add_command() in noise_control.cpp. Keep descriptions short: link.register
  * must fit in 8 KB, and the skill says the rest. */
 static cJSON *add_command(cJSON *commands, const char *name, const char *description,
-                          cJSON *optional)
+                          cJSON *required, cJSON *optional)
 {
     cJSON *c = cJSON_CreateObject();
     cJSON_AddStringToObject(c, "description", description);
-    cJSON_AddItemToObject(c, "required", cJSON_CreateObject());
+    cJSON_AddItemToObject(c, "required", required ? required : cJSON_CreateObject());
     cJSON_AddItemToObject(c, "optional", optional ? optional : cJSON_CreateObject());
     cJSON_AddItemToObject(commands, name, c);
     return c;
+}
+
+/* {name: param(type, description)}, for one parameter. */
+static cJSON *one_param(const char *name, const char *type, const char *description)
+{
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddItemToObject(o, name, param(type, description));
+    return o;
 }
 
 void muse_gadget_add_commands(cJSON *commands)
@@ -837,13 +875,20 @@ void muse_gadget_add_commands(cJSON *commands)
     add_command(commands, "device.settings",
                 "Read or change volume, mute, brightness and screen sleep. "
                 "Reports them all, with the battery and voice.",
-                opt);
+                NULL, opt);
 #if CONFIG_MUSE_HATCH
     cJSON *vopt = cJSON_CreateObject();
     cJSON_AddItemToObject(vopt, "name", param("string", "Voice to switch to; without it, lists them."));
     cJSON *v = add_command(commands, "voice.select",
-                           "List the ElevenLabs voices replies can be spoken in, or switch to one.", vopt);
+                           "List the ElevenLabs voices replies can be spoken in, or switch to one.", NULL, vopt);
     cJSON_AddNumberToObject(v, "timeout_ms", 30000);
+    add_command(commands, "voice.say", "Say text aloud on the gadget, captioned. Queued: plays once it's idle.",
+                one_param("text", "string", "What to say, up to 600 bytes."),
+                one_param("caption", "boolean", "false: don't show it."));
+    add_command(commands, "audio.play_url", "Play an MP3 from an https URL (up to 1 MB, 60 s). Queued.",
+                one_param("url", "string", "https:// link to an MP3."), NULL);
+    add_command(commands, "audio.chime", "Play a built-in chime. Queued.",
+                one_param("name", "string", MUSE_CHIME_NAMES "."), NULL);
 #endif
 }
 
@@ -856,6 +901,9 @@ cJSON *muse_gadget_command(const char *command, cJSON *params, const char *reque
 #if CONFIG_MUSE_HATCH
     if (!strcmp(command, "voice.select")) {
         return voice_select_start(params, request_id, session_generation, send);
+    }
+    if (!strcmp(command, "voice.say") || !strcmp(command, "audio.play_url") || !strcmp(command, "audio.chime")) {
+        return sound_command(command, params);
     }
 #else
     (void)request_id;

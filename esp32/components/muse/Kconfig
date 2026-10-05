@@ -200,14 +200,16 @@ menu "Muse"
             voice "George".
 
     config MUSE_GADGET_COMMANDS
-        bool "Gadget commands for Muse (settings, voices)"
+        bool "Gadget commands for Muse (settings, voices, sounds)"
         depends on MUSE_ENABLED
         default y
         help
             Advertises device.settings to Muse, so it can read and change
             the volume, mute, brightness and screen sleep and report the
-            battery, and, with spoken replies, voice.select, which switches
-            the ElevenLabs voice. skills/gadget-muse-s318/SKILL.md tells Muse
-            how to use them.
+            battery. With spoken replies, it also advertises voice.select,
+            which switches the ElevenLabs voice, and voice.say, audio.play_url
+            and audio.chime, which play speech, MP3 clips and chimes when the
+            gadget is idle. skills/gadget-muse-s318/SKILL.md tells Muse how to
+            use them.
 
 endmenu
