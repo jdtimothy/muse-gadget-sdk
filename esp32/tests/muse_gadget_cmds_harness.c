@@ -23,6 +23,7 @@
 #include <strings.h>
 
 #include "cJSON.h"
+#include "muse_gadget_sound.h"
 #include "gadget_pure.inc"
 
 static int failures;
@@ -336,6 +337,156 @@ static void test_voice_fetch_error(void)
     CHECK(!strcmp(voice_fetch_error(500, &msg), "network"));
 }
 
+/* parse_sound with the JSON parsed and the argument copied out before it's freed. */
+static bool sound(const char *command, const char *json, gadget_sound_t *s, char *err)
+{
+    static char arg[1024];
+    cJSON *p = NULL;
+    if (json) {
+        p = cJSON_Parse(json);
+        if (!p) {
+            fprintf(stderr, "bad test JSON: %s\n", json);
+            exit(2);
+        }
+    }
+    err[0] = '\0';
+    bool ok = parse_sound(command, p, s, err, 160);
+    if (ok) {
+        snprintf(arg, sizeof(arg), "%s", s->arg);
+        s->arg = arg;
+    }
+    cJSON_Delete(p);
+    return ok;
+}
+
+/* {"key":"<prefix><n - strlen(prefix) a's>"} */
+static const char *json_of(const char *key, const char *prefix, size_t n)
+{
+    static char j[1200];
+    int w = snprintf(j, sizeof(j), "{\"%s\":\"%s", key, prefix);
+    memset(j + w, 'a', n - strlen(prefix));
+    strcpy(j + w + n - strlen(prefix), "\"}");
+    return j;
+}
+
+static void test_parse_say(void)
+{
+    gadget_sound_t s;
+    char err[160];
+    CHECK(sound("voice.say", "{\"text\":\"Dinner's ready\"}", &s, err) && s.kind == MUSE_SOUND_SAY &&
+          !strcmp(s.arg, "Dinner's ready") && s.caption);
+    CHECK(sound("voice.say", "{\"text\":\"hi\",\"caption\":false}", &s, err) && !s.caption);
+    CHECK(sound("voice.say", json_of("text", "", 600), &s, err) && strlen(s.arg) == 600);
+    CHECK(!sound("voice.say", json_of("text", "", 601), &s, err) && strstr(err, "600"));
+    CHECK(!sound("voice.say", "{\"text\":\"\"}", &s, err) && strstr(err, "600"));
+    CHECK(!sound("voice.say", NULL, &s, err) && strstr(err, "text"));
+    CHECK(!sound("voice.say", "{}", &s, err) && strstr(err, "text"));
+    CHECK(!sound("voice.say", "{\"text\":5}", &s, err) && strstr(err, "string"));
+    CHECK(!sound("voice.say", "{\"text\":\"hi\",\"caption\":\"no\"}", &s, err) && strstr(err, "caption"));
+    /* A misspelled or unknown parameter is refused, not ignored. */
+    CHECK(!sound("voice.say", "{\"text\":\"hi\",\"voice\":\"George\"}", &s, err) && strstr(err, "voice"));
+    CHECK(!sound("voice.say", "[\"hi\"]", &s, err));
+}
+
+/* Review focus 1: only a usable https URL is queued. */
+static void test_parse_url(void)
+{
+    gadget_sound_t s;
+    char err[160];
+    CHECK(sound("audio.play_url", "{\"url\":\"https://example.com/a.mp3\"}", &s, err) &&
+          s.kind == MUSE_SOUND_URL && !strcmp(s.arg, "https://example.com/a.mp3"));
+    CHECK(sound("audio.play_url", "{\"url\":\"HTTPS://example.com/a.mp3\"}", &s, err));
+    CHECK(sound("audio.play_url", json_of("url", "https://", 512), &s, err));
+    CHECK(!sound("audio.play_url", json_of("url", "https://", 513), &s, err) && strstr(err, "512"));
+    CHECK(!sound("audio.play_url", "{\"url\":\"http://example.com/a.mp3\"}", &s, err) && strstr(err, "https"));
+    CHECK(!sound("audio.play_url", "{\"url\":\"https://\"}", &s, err));
+    CHECK(!sound("audio.play_url", "{\"url\":\"https://example.com/a b.mp3\"}", &s, err));
+    CHECK(!sound("audio.play_url", "{\"url\":\"https://example.com/a\\n.mp3\"}", &s, err));
+    CHECK(!sound("audio.play_url", "{\"url\":7}", &s, err) && strstr(err, "string"));
+    CHECK(!sound("audio.play_url", "{\"url\":\"https://x/a.mp3\",\"caption\":true}", &s, err) &&
+          strstr(err, "caption"));
+}
+
+static void test_parse_chime(void)
+{
+    gadget_sound_t s;
+    char err[160];
+    for (int i = 0; i < MUSE_CHIME_COUNT; i++) {
+        char j[64];
+        snprintf(j, sizeof(j), "{\"name\":\"%s\"}", MUSE_CHIMES[i].name);
+        CHECK(sound("audio.chime", j, &s, err) && s.kind == MUSE_SOUND_CHIME);
+    }
+    CHECK(sound("audio.chime", "{\"name\":\"TADA\"}", &s, err) && !strcmp(s.arg, "TADA"));
+    CHECK(!sound("audio.chime", "{\"name\":\"fanfare\"}", &s, err) && strstr(err, "ding") && strstr(err, "tada"));
+    CHECK(!sound("audio.chime", "{\"name\":7}", &s, err));
+    CHECK(!sound("audio.chime", "{}", &s, err) && strstr(err, "name"));
+}
+
+static void test_chime_names(void)
+{
+    CHECK(MUSE_CHIME_COUNT == 6);
+    for (int i = 0; i < MUSE_CHIME_COUNT; i++) {
+        CHECK(strstr(MUSE_CHIME_NAMES, MUSE_CHIMES[i].name) != NULL);
+        CHECK(muse_chime_find(MUSE_CHIMES[i].name) == i);
+        CHECK(MUSE_CHIMES[i].n >= 1 && MUSE_CHIMES[i].n <= 4 && MUSE_CHIMES[i].repeat >= 1);
+    }
+    CHECK(muse_chime_find("nope") == -1);
+}
+
+static const char *error_code(cJSON *r)
+{
+    return cJSON_GetObjectItem(cJSON_GetObjectItem(r, "error"), "code")->valuestring;
+}
+
+static const char *error_message(cJSON *r)
+{
+    return cJSON_GetObjectItem(cJSON_GetObjectItem(r, "error"), "message")->valuestring;
+}
+
+static void test_sound_results(void)
+{
+    cJSON *r = sound_result(2);
+    cJSON *p = cJSON_GetObjectItem(r, "payload");
+    CHECK(cJSON_IsTrue(cJSON_GetObjectItem(r, "ok")));
+    CHECK(cJSON_IsTrue(cJSON_GetObjectItem(p, "queued")) && cJSON_GetObjectItem(p, "position")->valueint == 2);
+    cJSON_Delete(r);
+    r = sound_result(0);
+    CHECK(!strcmp(error_code(r), "busy"));
+    cJSON_Delete(r);
+    r = sound_result(-1);
+    CHECK(!strcmp(error_code(r), "out_of_memory"));
+    cJSON_Delete(r);
+    r = muted_error(MUSE_SOUND_SAY, true);
+    CHECK(!strcmp(error_code(r), "muted") && strstr(error_message(r), "screen"));
+    cJSON_Delete(r);
+    r = muted_error(MUSE_SOUND_SAY, false);
+    CHECK(!strcmp(error_code(r), "muted") && strstr(error_message(r), "device.settings"));
+    cJSON_Delete(r);
+    r = muted_error(MUSE_SOUND_CHIME, true);
+    CHECK(strstr(error_message(r), "device.settings") != NULL);
+    cJSON_Delete(r);
+}
+
+static void test_hello_text(void)
+{
+    char out[80];
+    hello_text(out, sizeof(out), "George - Warm, Captivating Storyteller");
+    CHECK(!strcmp(out, "Hi, I'm George."));
+    hello_text(out, sizeof(out), "Rachel");
+    CHECK(!strcmp(out, "Hi, I'm Rachel."));
+    hello_text(out, sizeof(out), "");
+    CHECK(!strcmp(out, "Hi, this is my new voice."));
+    char wide[65] = "";
+    for (int i = 0; i < 32; i++) {
+        strcat(wide, "\xC3\xA9");
+    }
+    hello_text(out, sizeof(out), wide);
+    CHECK(valid_utf8(out) && strlen(out) == 8 + 64 + 1);
+    char small[20];
+    hello_text(small, sizeof(small), wide);
+    CHECK(valid_utf8(small));
+}
+
 int main(void)
 {
     test_parse_settings();
@@ -349,6 +500,12 @@ int main(void)
     test_truncation_keeps_utf8_whole();
     test_voice_label();
     test_voices_result_list_cap();
+    test_parse_say();
+    test_parse_url();
+    test_parse_chime();
+    test_chime_names();
+    test_sound_results();
+    test_hello_text();
     if (failures) {
         fprintf(stderr, "%d check(s) failed\n", failures);
         return 1;

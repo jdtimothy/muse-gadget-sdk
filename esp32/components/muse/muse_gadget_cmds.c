@@ -39,6 +39,7 @@
 #include <strings.h>
 
 #include "cJSON.h"
+#include "muse_gadget_sound.h"
 
 /* ---- Pure (host-tested) ---- */
 
@@ -504,6 +505,130 @@ static const char *voice_fetch_error(int status, const char **message)
     *message = status < 0 ? "couldn't reach ElevenLabs for the voice list"
                           : "ElevenLabs refused the voice list request";
     return "network";
+}
+
+typedef struct {
+    muse_sound_kind_t kind;
+    const char *arg;   /* in params: the text, URL or chime name */
+    bool caption;      /* voice.say: show the text as it's said */
+} gadget_sound_t;
+
+/* A URL the player can fetch: https://, a host, no spaces or control bytes. */
+static bool usable_url(const char *url, size_t len)
+{
+    if (len <= 8 || len > MUSE_SOUND_URL_MAX || strncasecmp(url, "https://", 8)) {
+        return false;
+    }
+    for (size_t i = 0; i < len; i++) {
+        if ((unsigned char)url[i] <= ' ' || url[i] == 0x7f) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/*
+ * Checks voice.say ({text, caption}), audio.play_url ({url}) or audio.chime
+ * ({name}) into *out; out->arg points into params. A missing, wrong or
+ * unknown parameter is refused, saying why in err.
+ */
+static bool parse_sound(const char *command, const cJSON *params, gadget_sound_t *out, char *err, size_t cap)
+{
+    const char *key = "name";
+    out->kind = MUSE_SOUND_CHIME;
+    if (!strcmp(command, "voice.say")) {
+        out->kind = MUSE_SOUND_SAY;
+        key = "text";
+    } else if (!strcmp(command, "audio.play_url")) {
+        out->kind = MUSE_SOUND_URL;
+        key = "url";
+    }
+    out->arg = NULL;
+    out->caption = true;
+    if (!cJSON_IsObject(params)) {
+        snprintf(err, cap, "%s is required", key);
+        return false;
+    }
+    const cJSON *v;
+    cJSON_ArrayForEach(v, params) {
+        if (!strcmp(v->string, key)) {
+            if (!cJSON_IsString(v)) {
+                snprintf(err, cap, "%s must be a string", key);
+                return false;
+            }
+            out->arg = v->valuestring;
+        } else if (out->kind == MUSE_SOUND_SAY && !strcmp(v->string, "caption")) {
+            if (!cJSON_IsBool(v)) {
+                snprintf(err, cap, "caption must be true or false");
+                return false;
+            }
+            out->caption = cJSON_IsTrue(v);
+        } else {
+            char name[41];
+            snprintf(name, sizeof(name), "%.40s", v->string);
+            utf8_trim(name);
+            snprintf(err, cap, "unknown parameter %s: use %s%s", name, key,
+                     out->kind == MUSE_SOUND_SAY ? " and caption" : "");
+            return false;
+        }
+    }
+    if (!out->arg) {
+        snprintf(err, cap, "%s is required", key);
+        return false;
+    }
+    size_t len = strlen(out->arg);
+    if (out->kind == MUSE_SOUND_SAY && (!len || len > MUSE_SOUND_SAY_MAX)) {
+        snprintf(err, cap, "text must be 1 to %d bytes", MUSE_SOUND_SAY_MAX);
+        return false;
+    }
+    if (out->kind == MUSE_SOUND_URL && !usable_url(out->arg, len)) {
+        snprintf(err, cap, "url must be an https:// address of at most %d bytes, without spaces",
+                 MUSE_SOUND_URL_MAX);
+        return false;
+    }
+    if (out->kind == MUSE_SOUND_CHIME && muse_chime_find(out->arg) < 0) {
+        snprintf(err, cap, "name must be " MUSE_CHIME_NAMES);
+        return false;
+    }
+    return true;
+}
+
+/* What a sound's muse_play_enqueue() gave: its place in the queue (1 = next),
+ * 0 when the queue is full, -1 out of memory. */
+static cJSON *sound_result(int position)
+{
+    if (position == 0) {
+        return gadget_error("busy", "sounds are already waiting to play; try again in a few seconds");
+    }
+    if (position < 0) {
+        return gadget_error("out_of_memory", "no room for the sound");
+    }
+    cJSON *p;
+    cJSON *result = gadget_ok(&p);
+    cJSON_AddBoolToObject(p, "queued", true);
+    cJSON_AddNumberToObject(p, "position", position);
+    return result;
+}
+
+/* The speaker is off: speech with a caption is shown instead, anything else waits for unmuting. */
+static cJSON *muted_error(muse_sound_kind_t kind, bool caption)
+{
+    return gadget_error("muted", kind == MUSE_SOUND_SAY && caption
+                                     ? "the speaker is muted, so the text is shown on the screen instead"
+                                     : "the speaker is muted: unmute it with device.settings first if the user wants sound");
+}
+
+/* What a new voice says first: "Hi, I'm George." for "George - Warm, Captivating Storyteller". */
+static void hello_text(char *out, size_t cap, const char *name)
+{
+    const char *dash = strstr(name, " - ");
+    size_t n = dash ? (size_t)(dash - name) : strlen(name);
+    if (!n) {
+        snprintf(out, cap, "Hi, this is my new voice.");
+        return;
+    }
+    snprintf(out, cap, "Hi, I'm %.*s.", (int)(n > GADGET_VOICE_NAME_MAX ? GADGET_VOICE_NAME_MAX : n), name);
+    utf8_trim(out);
 }
 
 /* ---- Device ---- */

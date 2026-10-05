@@ -39,7 +39,7 @@ class MuseGadgetCmdsHarnessTest(unittest.TestCase):
         (out / "gadget_pure.inc").write_text(source[start:source.index("/* ---- Device", start)])
         cc = shlex.split(os.environ.get("CC", "cc"))
         flags = ["-Wall", "-Wextra", "-Werror", "-D_DEFAULT_SOURCE", "-DCJSON_NESTING_LIMIT=16",
-                 "-I", str(JSON), "-I", str(out)]
+                 "-I", str(JSON), "-I", str(out), "-I", str(ROOT / "components/muse")]
         commands = [
             [*cc, "-std=c11", *flags, "-c", str(JSON / "cJSON.c"), "-o", str(out / "cjson.o")],
             [*cc, "-std=c11", *flags, str(ROOT / "tests/muse_gadget_cmds_harness.c"),
