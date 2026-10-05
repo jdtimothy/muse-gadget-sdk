@@ -14,6 +14,7 @@
 
 from pathlib import Path
 import os
+import re
 import shlex
 import subprocess
 import tempfile
@@ -53,6 +54,40 @@ class MuseGadgetCmdsHarnessTest(unittest.TestCase):
     def test_harness(self):
         result = subprocess.run([str(self.out / "gadget")], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+
+class MuseGadgetCmdsSourceTest(unittest.TestCase):
+    """Source checks: they need no compiler."""
+
+    def test_option_and_build(self):
+        kconfig = (ROOT / "components/muse/Kconfig").read_text()
+        self.assertIn("config MUSE_GADGET_COMMANDS", kconfig)
+        cmake = (ROOT / "components/muse/CMakeLists.txt").read_text()
+        self.assertIn('"muse_gadget_cmds.c"', cmake)
+
+    def test_commands_are_advertised_with_the_option(self):
+        noise = (ROOT / "main/noise_control.cpp").read_text()
+        hook = re.search(
+            r"#if CONFIG_MUSE_GADGET_COMMANDS\s*\n\s*muse_gadget_add_commands\(commands\);\s*\n#endif\s*\n"
+            r"\s*cJSON_AddItemToObject\(params, \"commands_v2\", commands\);", noise)
+        self.assertIsNotNone(hook, "build_register_json() lacks the muse_gadget_add_commands hook")
+
+    def test_commands_are_dispatched_first_with_the_option(self):
+        app = (ROOT / "main/app.c").read_text()
+        start = app.index("static cJSON *on_ws_command(")
+        body = app[start:app.index("unsupported command", start)]
+        first = body.index("{") + 1
+        self.assertRegex(
+            body[first:first + 400],
+            r"^\s*#if CONFIG_MUSE_GADGET_COMMANDS\s*\n\s*cJSON \*gadget = muse_gadget_command\(")
+
+    def test_register_text_stays_small(self):
+        # link.register must fit in 8 KB; the skill carries the detail.
+        source = SOURCE.read_text()
+        start = source.index("void muse_gadget_add_commands(")
+        body = source[start:source.index("\n}\n", start)]
+        text = "".join(re.findall(r'"((?:[^"\\]|\\.)*)"', body))
+        self.assertLess(len(text), 1000, text)
 
 
 if __name__ == "__main__":

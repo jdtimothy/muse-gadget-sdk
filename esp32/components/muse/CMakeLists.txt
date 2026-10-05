@@ -41,7 +41,8 @@ if(CONFIG_MUSE_ENABLED)
         "muse_keypad.c"
         "muse_lv_mem.c"
         "muse_link.c"
-        "muse_ble.c")
+        "muse_ble.c"
+        "muse_gadget_cmds.c")   # compiles to nothing without CONFIG_MUSE_GADGET_COMMANDS
     if(CONFIG_MUSE_HATCH)
         list(APPEND srcs "muse_chat.c" "muse_account_api.c" "muse_chat_session.cpp" "muse_tts_elevenlabs.c")
         list(APPEND embed "test_reply.mp3")   # muse_hatch_mp3_selftest

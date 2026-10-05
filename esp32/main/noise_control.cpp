@@ -46,6 +46,9 @@ extern "C" {
 #include "muse_state.h"
 }
 #endif
+#if CONFIG_MUSE_GADGET_COMMANDS
+#include "muse_gadget_cmds.h"
+#endif
 }
 
 #include <xplat/noise/core/ClientSession.h>
@@ -1403,6 +1406,9 @@ static char *build_register_json(void) {
                     ota_required, ota_optional);
     }
 
+#if CONFIG_MUSE_GADGET_COMMANDS
+    muse_gadget_add_commands(commands);
+#endif
     cJSON_AddItemToObject(params, "commands_v2", commands);
     cJSON_AddItemToObject(root, "params", params);
 
@@ -1420,6 +1426,9 @@ static char *build_register_json(void) {
         }
     }
     cJSON_Delete(root);
+#if CONFIG_MUSE_GADGET_COMMANDS
+    if (json) ESP_LOGI(TAG, "link.register: %u bytes", (unsigned)strlen(json));
+#endif
     return json;
 }
 

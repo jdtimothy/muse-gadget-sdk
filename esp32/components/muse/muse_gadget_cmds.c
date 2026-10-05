@@ -156,4 +156,98 @@ static cJSON *settings_result(const gadget_settings_t *s, int battery_pct, bool 
 
 /* ---- Device ---- */
 
+#include "esp_log.h"
+
+#include "muse_settings.h"
+#include "muse_state.h"
+
+static const char *TAG = "muse_gadget";
+
+static gadget_settings_t current_settings(void)
+{
+    return (gadget_settings_t){
+        .volume = muse_settings_volume(),
+        .muted = !muse_settings_speaker_on(),
+        .brightness = muse_settings_brightness(),
+        .sleep_s = muse_settings_sleep_s(),
+    };
+}
+
+static cJSON *settings_command(const cJSON *params)
+{
+    gadget_settings_t was = current_settings();
+    gadget_settings_t s = was;
+    char err[160];
+    if (!parse_settings(params, &s, err, sizeof(err))) {
+        return gadget_error("invalid_params", err);
+    }
+    /* Only what changed: each setter writes flash. The setters already run from
+     * the BLE task too (muse_ble.c); brightness, sleep and the speaker are polled. */
+    if (s.volume != was.volume) {
+        muse_settings_set_volume(s.volume);
+    }
+    if (s.muted != was.muted) {
+        muse_settings_set_speaker_on(!s.muted);
+    }
+    if (s.brightness != was.brightness) {
+        muse_settings_set_brightness(s.brightness);
+    }
+    if (s.sleep_s != was.sleep_s) {
+        muse_settings_set_sleep_s(s.sleep_s);
+    }
+    if (params && cJSON_GetArraySize(params)) {
+        ESP_LOGI(TAG, "settings: volume %d%s, brightness %d, sleep %ds", s.volume,
+                 s.muted ? " (muted)" : "", s.brightness, s.sleep_s);
+    }
+    muse_power_t power = muse_state_power();
+    return settings_result(&s, power.battery_pct, power.charging, power.usb, NULL);
+}
+
+static cJSON *param(const char *type, const char *description)
+{
+    cJSON *p = cJSON_CreateObject();
+    cJSON_AddStringToObject(p, "type", type);
+    cJSON_AddStringToObject(p, "description", description);
+    return p;
+}
+
+/* As add_command() in noise_control.cpp. Keep descriptions short: link.register
+ * must fit in 8 KB, and the skill says the rest. */
+static cJSON *add_command(cJSON *commands, const char *name, const char *description,
+                          cJSON *optional)
+{
+    cJSON *c = cJSON_CreateObject();
+    cJSON_AddStringToObject(c, "description", description);
+    cJSON_AddItemToObject(c, "required", cJSON_CreateObject());
+    cJSON_AddItemToObject(c, "optional", optional ? optional : cJSON_CreateObject());
+    cJSON_AddItemToObject(commands, name, c);
+    return c;
+}
+
+void muse_gadget_add_commands(cJSON *commands)
+{
+    cJSON *opt = cJSON_CreateObject();
+    cJSON_AddItemToObject(opt, "volume", param("integer", "Speaker volume, 0-100."));
+    cJSON_AddItemToObject(opt, "muted", param("boolean", "true: replies are shown, not spoken."));
+    cJSON_AddItemToObject(opt, "brightness", param("integer", "Screen brightness, 10-100."));
+    cJSON_AddItemToObject(opt, "screen_sleep_s",
+                          param("integer", "Screen sleeps after 0 (never), 30, 60, 120, 300 or 600 s."));
+    add_command(commands, "device.settings",
+                "Read or change volume, mute, brightness and screen sleep. "
+                "Reports them all, with the battery and voice.",
+                opt);
+}
+
+cJSON *muse_gadget_command(const char *command, cJSON *params, const char *request_id,
+                           uint64_t session_generation, muse_gadget_send_fn send)
+{
+    (void)request_id;
+    (void)session_generation;
+    (void)send;
+    if (!strcmp(command, "device.settings")) {
+        return settings_command(params);
+    }
+    return NULL;
+}
+
 #endif   /* CONFIG_MUSE_GADGET_COMMANDS */

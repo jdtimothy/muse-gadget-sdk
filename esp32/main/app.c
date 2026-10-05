@@ -62,6 +62,9 @@
 #include "link_pairing.h"
 #include "bug_report.h"
 #include "diagnostic_log.h"
+#if CONFIG_MUSE_GADGET_COMMANDS
+#include "muse_gadget_cmds.h"
+#endif
 #if CONFIG_HOMEHUB_VOICE
 #include "voice.h"
 #endif
@@ -1838,6 +1841,11 @@ static cJSON *bug_report_command(
 static cJSON *on_ws_command(
     const char *command, cJSON *params, const char *request_id,
     noise_ctrl_session_generation_t session_generation) {
+#if CONFIG_MUSE_GADGET_COMMANDS
+    cJSON *gadget = muse_gadget_command(command, params, request_id, session_generation,
+                                        noise_ctrl_send_command_result);
+    if (gadget) return gadget;
+#endif
     if (strcmp(command, "device.list_vms") == 0) {
         return list_vms_command();
     }
