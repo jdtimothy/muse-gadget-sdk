@@ -48,6 +48,28 @@ size_t muse_tts_read(uint32_t job, uint8_t *dst, size_t cap, bool *ended, bool *
 /* Stops the current fetch. */
 void muse_tts_cancel(void);
 
+#define MUSE_TTS_VOICE_ID_MAX 32
+#define MUSE_TTS_VOICE_NAME_MAX 64
+
+/*
+ * The voice replies are spoken in: the one muse_tts_set_voice() saved, else
+ * the build's (CONFIG_MUSE_TTS_ELEVENLABS_VOICE_ID, name unknown). Copies its
+ * ID (MUSE_TTS_VOICE_ID_MAX + 1 bytes) and name (MUSE_TTS_VOICE_NAME_MAX + 1,
+ * empty when unknown); either may be NULL.
+ */
+void muse_tts_voice(char *id, char *name);
+
+/* Saves the voice in NVS; replies use it from the next one. */
+bool muse_tts_set_voice(const char *id, const char *name);
+
+/*
+ * GET /v1/voices: the HTTP status, -1 when ElevenLabs can't be reached or the
+ * list is cut short or too big, 0 with no key. *body (NUL-terminated, PSRAM)
+ * is the caller's to free(). Blocks for the download: call from a task of
+ * your own.
+ */
+int muse_tts_fetch_voices(char **body, size_t *len);
+
 #ifdef __cplusplus
 }
 #endif

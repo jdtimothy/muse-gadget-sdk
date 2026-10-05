@@ -466,6 +466,17 @@ static const char *voice_fetch_error(int status, const char **message)
 
 #include "esp_log.h"
 
+#include <stdatomic.h>
+#include <stdlib.h>
+
+#include "esp_heap_caps.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/idf_additions.h"
+#include "freertos/task.h"
+#if CONFIG_MUSE_HATCH
+#include "muse_tts_elevenlabs.h"
+#endif
+
 #include "muse_settings.h"
 #include "muse_state.h"
 
@@ -508,8 +519,120 @@ static cJSON *settings_command(const cJSON *params)
                  s.muted ? " (muted)" : "", s.brightness, s.sleep_s);
     }
     muse_power_t power = muse_state_power();
-    return settings_result(&s, power.battery_pct, power.charging, power.usb, NULL);
+    char voice[GADGET_VOICE_NAME_MAX + 1] = "";
+#if CONFIG_MUSE_HATCH
+    muse_tts_voice(NULL, voice);
+#endif
+    return settings_result(&s, power.battery_pct, power.charging, power.usb, voice);
 }
+
+#if CONFIG_MUSE_HATCH
+_Static_assert(GADGET_VOICE_ID_MAX == MUSE_TTS_VOICE_ID_MAX, "voice ID sizes differ");
+_Static_assert(GADGET_VOICE_NAME_MAX == MUSE_TTS_VOICE_NAME_MAX, "voice name sizes differ");
+
+/* With instructions and rodata in PSRAM, flash writes leave the cache on, so a
+ * PSRAM stack may save to NVS; otherwise the task needs an internal one. */
+#if CONFIG_SPIRAM_FETCH_INSTRUCTIONS && CONFIG_SPIRAM_RODATA
+#define VOICE_TASK_CAPS (MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
+#else
+#define VOICE_TASK_CAPS (MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)
+#endif
+
+typedef struct {
+    uint64_t session_generation;
+    char request_id[64];
+    char name[GADGET_VOICE_NAME_MAX + 1];   /* empty: list the voices */
+    muse_gadget_send_fn send;
+} voice_job_t;
+
+static atomic_bool s_voice_busy;
+
+static cJSON *voice_select(const char *name)
+{
+    char *body = NULL;
+    size_t len = 0;
+    int status = muse_tts_enabled() ? muse_tts_fetch_voices(&body, &len) : 0;
+    const char *message = NULL;
+    const char *code = voice_fetch_error(status, &message);
+    if (code) {
+        free(body);
+        return gadget_error(code, message);
+    }
+    gadget_voice_t *v = heap_caps_calloc(GADGET_VOICES_MAX, sizeof(*v), MALLOC_CAP_SPIRAM);
+    int total = v ? scan_voices(body, len, v, GADGET_VOICES_MAX) : -1;
+    free(body);
+    if (!v) {
+        return gadget_error("out_of_memory", "no room for the voice list");
+    }
+    int stored = total < GADGET_VOICES_MAX ? total : GADGET_VOICES_MAX;
+    char current[GADGET_VOICE_ID_MAX + 1];
+    muse_tts_voice(current, NULL);
+    cJSON *result;
+    if (total < 0) {
+        result = gadget_error("network", "ElevenLabs sent a voice list the gadget can't read");
+    } else if (!name[0]) {
+        result = voices_result(v, stored, total, current);
+    } else {
+        int i = match_voice(v, stored, name);
+        if (i < 0) {
+            char msg[512];
+            voice_choice_error(msg, sizeof(msg), v, stored, name, i);
+            result = gadget_error(i == -2 ? "ambiguous" : "not_found", msg);
+        } else if (!muse_tts_set_voice(v[i].id, v[i].name)) {
+            result = gadget_error("internal", "couldn't save the voice");
+        } else {
+            result = selected_result(&v[i]);
+        }
+    }
+    free(v);
+    return result;
+}
+
+static void voice_task(void *arg)
+{
+    voice_job_t *job = arg;
+    job->send(job->session_generation, job->request_id, voice_select(job->name));
+    free(job);
+    atomic_store(&s_voice_busy, false);
+    vTaskDeleteWithCaps(NULL);
+}
+
+static cJSON *voice_select_start(const cJSON *params, const char *request_id,
+                                 uint64_t session_generation, muse_gadget_send_fn send)
+{
+    const cJSON *name = cJSON_GetObjectItemCaseSensitive(params, "name");
+    if (name && !cJSON_IsString(name)) {
+        return gadget_error("invalid_params", "name must be a string");
+    }
+    const char *n = name ? name->valuestring : "";
+    if (strlen(n) > GADGET_VOICE_NAME_MAX) {
+        return gadget_error("invalid_params", "name is longer than any voice's");
+    }
+    if (!request_id || strlen(request_id) >= sizeof(((voice_job_t *)0)->request_id)) {
+        return gadget_error("invalid_params", "request_id is invalid");
+    }
+    if (atomic_exchange(&s_voice_busy, true)) {
+        return gadget_error("busy", "already looking up the voices; try again in a few seconds");
+    }
+    voice_job_t *job = heap_caps_calloc(1, sizeof(*job), MALLOC_CAP_SPIRAM);
+    if (job) {
+        job->session_generation = session_generation;
+        strlcpy(job->request_id, request_id, sizeof(job->request_id));
+        strlcpy(job->name, n, sizeof(job->name));
+        job->send = send;
+    }
+    /* Stack as the TTS task's: TLS runs here. */
+    if (!job || xTaskCreateWithCaps(voice_task, "gadget_voice", 12 * 1024, job, 3, NULL,
+                                    VOICE_TASK_CAPS) != pdPASS) {
+        free(job);
+        atomic_store(&s_voice_busy, false);
+        return gadget_error("out_of_memory", "couldn't start the voice lookup");
+    }
+    cJSON *async = cJSON_CreateObject();
+    cJSON_AddBoolToObject(async, "_async", true);
+    return async;
+}
+#endif
 
 static cJSON *param(const char *type, const char *description)
 {
@@ -544,17 +667,30 @@ void muse_gadget_add_commands(cJSON *commands)
                 "Read or change volume, mute, brightness and screen sleep. "
                 "Reports them all, with the battery and voice.",
                 opt);
+#if CONFIG_MUSE_HATCH
+    cJSON *vopt = cJSON_CreateObject();
+    cJSON_AddItemToObject(vopt, "name", param("string", "Voice to switch to; without it, lists them."));
+    cJSON *v = add_command(commands, "voice.select",
+                           "List the ElevenLabs voices replies can be spoken in, or switch to one.", vopt);
+    cJSON_AddNumberToObject(v, "timeout_ms", 30000);
+#endif
 }
 
 cJSON *muse_gadget_command(const char *command, cJSON *params, const char *request_id,
                            uint64_t session_generation, muse_gadget_send_fn send)
 {
-    (void)request_id;
-    (void)session_generation;
-    (void)send;
     if (!strcmp(command, "device.settings")) {
         return settings_command(params);
     }
+#if CONFIG_MUSE_HATCH
+    if (!strcmp(command, "voice.select")) {
+        return voice_select_start(params, request_id, session_generation, send);
+    }
+#else
+    (void)request_id;
+    (void)session_generation;
+    (void)send;
+#endif
     return NULL;
 }
 

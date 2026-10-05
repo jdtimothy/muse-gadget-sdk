@@ -89,6 +89,24 @@ class MuseGadgetCmdsSourceTest(unittest.TestCase):
         text = "".join(re.findall(r'"((?:[^"\\]|\\.)*)"', body))
         self.assertLess(len(text), 1000, text)
 
+    def test_elevenlabs_key_is_never_logged(self):
+        for path in ("components/muse/muse_tts_elevenlabs.c", "components/muse/muse_gadget_cmds.c"):
+            source = (ROOT / path).read_text()
+            for call in re.findall(r"ESP_LOG\w\(.*?\);", source, re.S):
+                self.assertNotIn("API_KEY", call, f"{path}: {call}")
+
+    def test_voice_select_needs_spoken_replies(self):
+        source = SOURCE.read_text()
+        add = source[source.index("void muse_gadget_add_commands("):]
+        block = add[add.index("#if CONFIG_MUSE_HATCH"):]
+        self.assertIn('"voice.select"', block[:block.index("#endif")])
+
+    def test_voices_come_from_the_saved_voice(self):
+        tts = (ROOT / "components/muse/muse_tts_elevenlabs.c").read_text()
+        fetch = tts[tts.index("static bool fetch(uint32_t job)"):tts.index("static void tts_task(")]
+        self.assertIn("muse_tts_voice(", fetch)
+        self.assertNotIn("CONFIG_MUSE_TTS_ELEVENLABS_VOICE_ID", fetch)
+
 
 if __name__ == "__main__":
     unittest.main()

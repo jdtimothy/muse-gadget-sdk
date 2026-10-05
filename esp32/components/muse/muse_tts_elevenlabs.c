@@ -29,6 +29,7 @@
 
 #include <stdatomic.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "cJSON.h"
@@ -40,6 +41,7 @@
 #include "freertos/idf_additions.h"
 #include "freertos/stream_buffer.h"
 #include "freertos/task.h"
+#include "nvs.h"
 #include "sdkconfig.h"
 
 #ifndef CONFIG_MUSE_TTS_ELEVENLABS_API_KEY   /* the Voice PE, which has no Muse menu */
@@ -58,6 +60,9 @@ static const char *TAG = "muse_tts";
 #define SEND_WAIT_MS 100                   /* how often a full buffer checks for a cancel */
 #define TIMEOUT_MS 15000
 #define ERR_BODY 200                       /* how much of an error reply to log */
+#define VOICES_URL "https://api.elevenlabs.io/v1/voices"
+#define VOICES_MAX_BYTES (1024 * 1024)     /* a big library is a few hundred KB */
+#define VOICE_NS "muse_tts"
 
 /*
  * The roots api.elevenlabs.io chains to: Google Trust Services' GTS Root R1
@@ -119,6 +124,65 @@ static atomic_uint s_ended;   /* the last fetch to finish */
 static atomic_bool s_ok;      /* whether all of s_ended's MP3 arrived */
 static atomic_bool s_busy;    /* the task has a fetch, or one is on its way to it */
 
+/* The voice: the build's until muse_tts_set_voice() saves one (NVS "muse_tts"). */
+static portMUX_TYPE s_voice_lock = portMUX_INITIALIZER_UNLOCKED;
+static char s_voice_id[MUSE_TTS_VOICE_ID_MAX + 1] = CONFIG_MUSE_TTS_ELEVENLABS_VOICE_ID;
+static char s_voice_name[MUSE_TTS_VOICE_NAME_MAX + 1];
+
+static void use_voice(const char *id, const char *name)
+{
+    taskENTER_CRITICAL(&s_voice_lock);
+    strlcpy(s_voice_id, id, sizeof(s_voice_id));
+    strlcpy(s_voice_name, name, sizeof(s_voice_name));
+    taskEXIT_CRITICAL(&s_voice_lock);
+}
+
+void muse_tts_voice(char *id, char *name)
+{
+    taskENTER_CRITICAL(&s_voice_lock);
+    if (id) {
+        strlcpy(id, s_voice_id, MUSE_TTS_VOICE_ID_MAX + 1);
+    }
+    if (name) {
+        strlcpy(name, s_voice_name, MUSE_TTS_VOICE_NAME_MAX + 1);
+    }
+    taskEXIT_CRITICAL(&s_voice_lock);
+}
+
+/* The saved voice, if any (NVS is up: muse_settings_init() ran first). */
+static void load_voice(void)
+{
+    nvs_handle_t h;
+    if (nvs_open(VOICE_NS, NVS_READONLY, &h) != ESP_OK) {
+        return;   /* never saved */
+    }
+    char id[MUSE_TTS_VOICE_ID_MAX + 1] = "";
+    char name[MUSE_TTS_VOICE_NAME_MAX + 1] = "";
+    size_t n = sizeof(id);
+    if (nvs_get_str(h, "voice_id", id, &n) == ESP_OK && id[0]) {
+        n = sizeof(name);
+        nvs_get_str(h, "voice_name", name, &n);
+        use_voice(id, name);
+    }
+    nvs_close(h);
+}
+
+bool muse_tts_set_voice(const char *id, const char *name)
+{
+    nvs_handle_t h;
+    if (!id[0] || nvs_open(VOICE_NS, NVS_READWRITE, &h) != ESP_OK) {
+        return false;
+    }
+    bool ok = nvs_set_str(h, "voice_id", id) == ESP_OK && nvs_set_str(h, "voice_name", name) == ESP_OK &&
+              nvs_commit(h) == ESP_OK;
+    nvs_close(h);
+    if (ok) {
+        use_voice(id, name);
+        ESP_LOGI(TAG, "voice now %s (%s)", name, id);
+    }
+    return ok;
+}
+
 /* Sends the request and streams the reply into s_buf. True if all of it arrived. */
 static bool request(esp_http_client_handle_t c, const char *body, uint32_t job)
 {
@@ -177,8 +241,10 @@ static bool fetch(uint32_t job)
     if (!body) {
         return false;
     }
+    char voice[MUSE_TTS_VOICE_ID_MAX + 1];
+    muse_tts_voice(voice, NULL);
     char url[192];
-    snprintf(url, sizeof(url), TTS_URL, CONFIG_MUSE_TTS_ELEVENLABS_VOICE_ID, TTS_FORMAT);
+    snprintf(url, sizeof(url), TTS_URL, voice, TTS_FORMAT);
     const esp_http_client_config_t cfg = {
         .url = url,
         .method = HTTP_METHOD_POST,
@@ -239,7 +305,10 @@ bool muse_tts_init(void)
         s_task = NULL;
         return false;
     }
-    ESP_LOGI(TAG, "ElevenLabs TTS on, voice %s", CONFIG_MUSE_TTS_ELEVENLABS_VOICE_ID);
+    load_voice();
+    char id[MUSE_TTS_VOICE_ID_MAX + 1], name[MUSE_TTS_VOICE_NAME_MAX + 1];
+    muse_tts_voice(id, name);
+    ESP_LOGI(TAG, "ElevenLabs TTS on, voice %s%s%s%s", id, name[0] ? " (" : "", name, name[0] ? ")" : "");
     return true;
 }
 
@@ -303,4 +372,73 @@ size_t muse_tts_read(uint32_t job, uint8_t *dst, size_t cap, bool *ended, bool *
 void muse_tts_cancel(void)
 {
     atomic_store(&s_want, 0);
+}
+
+int muse_tts_fetch_voices(char **body, size_t *len)
+{
+    *body = NULL;
+    *len = 0;
+    if (!CONFIG_MUSE_TTS_ELEVENLABS_API_KEY[0]) {
+        return 0;
+    }
+    const esp_http_client_config_t cfg = {
+        .url = VOICES_URL,
+        .method = HTTP_METHOD_GET,
+        .timeout_ms = TIMEOUT_MS,
+        .cert_pem = GTS_ROOTS_PEM,
+        .buffer_size = 2048,
+        .buffer_size_tx = 1024,
+    };
+    esp_http_client_handle_t c = esp_http_client_init(&cfg);
+    if (!c) {
+        return -1;
+    }
+    esp_http_client_set_header(c, "xi-api-key", CONFIG_MUSE_TTS_ELEVENLABS_API_KEY);
+    esp_http_client_set_header(c, "Accept", "application/json");
+    int status = -1;
+    if (esp_http_client_open(c, 0) != ESP_OK || esp_http_client_fetch_headers(c) < 0) {
+        ESP_LOGW(TAG, "can't reach ElevenLabs for the voices");
+    } else {
+        status = esp_http_client_get_status_code(c);
+        size_t cap = 16 * 1024, n = 0;
+        char *buf = heap_caps_malloc(cap + 1, MALLOC_CAP_SPIRAM);
+        while (buf) {
+            if (n == cap) {
+                char *more = cap < VOICES_MAX_BYTES ? heap_caps_realloc(buf, cap * 2 + 1, MALLOC_CAP_SPIRAM) : NULL;
+                if (!more) {
+                    ESP_LOGW(TAG, "voice list too big (over %u bytes)", (unsigned)cap);
+                    free(buf);
+                    buf = NULL;
+                    break;
+                }
+                buf = more;
+                cap *= 2;
+            }
+            int r = esp_http_client_read(c, buf + n, cap - n);
+            if (r < 0) {
+                free(buf);
+                buf = NULL;
+                break;
+            }
+            if (r == 0) {
+                break;
+            }
+            n += (size_t)r;
+        }
+        if (buf && status == 200 && !esp_http_client_is_complete_data_received(c)) {
+            free(buf);
+            buf = NULL;
+        }
+        if (buf) {
+            buf[n] = '\0';
+            *body = buf;
+            *len = n;
+        } else {
+            status = -1;
+        }
+        ESP_LOGI(TAG, "voices: HTTP %d, %u bytes", status, (unsigned)n);
+    }
+    esp_http_client_close(c);
+    esp_http_client_cleanup(c);
+    return status;
 }
