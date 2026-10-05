@@ -65,6 +65,7 @@ static const char *TAG = "board";
 #define LCD_CHUNK_BYTES (BSP_LCD_H_RES * 8 * 2)   /* 8 rows, ~5.9 KB internal DMA each */
 #define PAUSE_WAIT_MS 1000      /* the worker acks within one LVGL timer pass */
 #define PAUSE_TRIES 3
+#define PANEL_SETTLE_MS 150     /* the panel takes ~120 ms after a software reset */
 
 static esp_lcd_panel_io_handle_t s_io;
 static esp_lcd_touch_handle_t s_tp;
@@ -113,6 +114,17 @@ static lv_display_t *display_start(lv_indev_t **touch)
         ESP_LOGE(TAG, "touch controller not found");
         return NULL;
     }
+    /*
+     * The panel has no reset line (BSP_LCD_RST is NC) and keeps its sleep
+     * state across a chip reset, so a reflash or a USB reset while the screen
+     * slept left it black. The BSP starts it with a software reset and sends
+     * its setup 20 ms later, too soon for a panel that was asleep, which drops
+     * it. Run the whole setup again once the panel has settled, before the UI
+     * draws.
+     */
+    vTaskDelay(pdMS_TO_TICKS(PANEL_SETTLE_MS));
+    esp_lcd_panel_init(panel);
+    esp_lcd_panel_disp_on_off(panel, true);
 
     const esp_lv_adapter_display_config_t disp_cfg = {
         .panel = panel,
