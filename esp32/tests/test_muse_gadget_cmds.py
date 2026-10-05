@@ -180,6 +180,18 @@ class MuseGadgetCmdsSourceTest(unittest.TestCase):
         cmake = (ROOT / "components/muse/CMakeLists.txt").read_text()
         self.assertIn('"muse_gadget_options.c"', cmake)
 
+    def test_buttons_draw_showable_text_and_send_the_original(self):
+        # Review fix: unscii-16 has no curly quotes; a tap still sends Muse its own words.
+        opts = (ROOT / "components/muse/muse_gadget_options.c").read_text()
+        build = opts[opts.index("static void build("):]
+        self.assertIn("muse_text_showable(", build[:build.index("\n}\n")])
+        tap = opts[opts.index("static void on_tap("):]
+        tap = tap[:tap.index("\n}\n")]
+        self.assertIn("s_shown_labels[i]", tap)
+        self.assertNotIn("lv_label_get_text", tap)
+        frame = opts[opts.index("bool muse_options_frame("):]
+        self.assertIn("muse_options_step(", frame)
+
     def test_ui_shows_options(self):
         ui = (ROOT / "components/muse/muse_ui.c").read_text()
         self.assertIn('#include "muse_gadget_options.h"', ui)

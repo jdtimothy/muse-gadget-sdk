@@ -730,6 +730,9 @@ static cJSON *react_result(int id, int secs)
     return result;
 }
 
+static bool parse_option_list(const cJSON *list, char labels[][MUSE_OPTIONS_LABEL_MAX + 1], int *n, char *err,
+                              size_t cap);
+
 /*
  * Checks display.options' {options: [2-4 labels]} into labels: each 1-24
  * bytes, not all spaces, no control characters. A bad or unknown parameter is
@@ -757,6 +760,20 @@ static bool parse_options(const cJSON *params, char labels[][MUSE_OPTIONS_LABEL_
         snprintf(err, cap, "options is required: %d to %d short replies", MUSE_OPTIONS_MIN, MUSE_OPTIONS_MAX);
         return false;
     }
+    /* A tool layer may send the list as a JSON string: read that as the list. */
+    cJSON *parsed = cJSON_IsString(list) ? cJSON_Parse(list->valuestring) : NULL;
+    if (cJSON_IsArray(parsed)) {
+        list = parsed;
+    }
+    bool ok = parse_option_list(list, labels, n, err, cap);
+    cJSON_Delete(parsed);
+    return ok;
+}
+
+/* The list part of parse_options(). */
+static bool parse_option_list(const cJSON *list, char labels[][MUSE_OPTIONS_LABEL_MAX + 1], int *n, char *err,
+                              size_t cap)
+{
     if (!cJSON_IsArray(list)) {
         snprintf(err, cap, "options must be a list of %d to %d strings", MUSE_OPTIONS_MIN, MUSE_OPTIONS_MAX);
         return false;

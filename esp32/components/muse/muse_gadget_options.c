@@ -35,6 +35,7 @@
 
 #include "muse_gadget_play.h"
 #include "muse_state.h"
+#include "muse_text.h"
 
 static const char *TAG = "muse_options";
 
@@ -53,6 +54,7 @@ static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
 static char s_labels[MUSE_OPTIONS_MAX][MUSE_OPTIONS_LABEL_MAX + 1];
 static int s_n;
 static uint32_t s_version;              /* bumped by each muse_options_set() */
+static int64_t s_set_us;                /* when the waiting set came */
 
 /* Set by the UI task on a tap, taken by the voice task. */
 static char s_tap[MUSE_OPTIONS_LABEL_MAX + 1];
@@ -60,6 +62,7 @@ static bool s_tapped;
 
 /* The UI task's own. */
 static uint32_t s_shown_version;        /* the set on screen or done with */
+static char s_shown_labels[MUSE_OPTIONS_MAX][MUSE_OPTIONS_LABEL_MAX + 1];   /* Muse's own words */
 static lv_obj_t *s_box;
 static lv_obj_t *s_buttons[MUSE_OPTIONS_MAX];
 static int64_t s_until_us;              /* when they go untouched */
@@ -71,6 +74,7 @@ void muse_options_set(char labels[][MUSE_OPTIONS_LABEL_MAX + 1], int n)
     memcpy(s_labels, labels, (size_t)n * sizeof(s_labels[0]));
     s_n = n;
     s_version++;
+    s_set_us = esp_timer_get_time();
     taskEXIT_CRITICAL(&s_lock);
     /* The UI's frame code doesn't run while the screen sleeps: wake it, so the
      * buttons can show (after a reply it's awake already). */
@@ -115,7 +119,7 @@ static void on_tap(lv_event_t *e)
     }
     lv_obj_t *label = lv_obj_get_child(s_buttons[i], 0);
     taskENTER_CRITICAL(&s_lock);
-    strlcpy(s_tap, lv_label_get_text(label), sizeof(s_tap));
+    strlcpy(s_tap, s_shown_labels[i], sizeof(s_tap));   /* Muse's wording, not the screen's stand-in */
     s_tapped = true;
     taskEXIT_CRITICAL(&s_lock);
     ESP_LOGI(TAG, "option %d tapped", i + 1);
@@ -143,6 +147,7 @@ static void build(lv_obj_t *parent, int top, int h, int w, char labels[][MUSE_OP
     lv_obj_remove_flag(s_box, LV_OBJ_FLAG_SCROLLABLE);
     int bh = (h - (n - 1) * BTN_GAP) / n;
     bh = bh < BTN_H ? bh : BTN_H;
+    memcpy(s_shown_labels, labels, (size_t)n * sizeof(s_shown_labels[0]));
     for (int i = 0; i < n; i++) {
         lv_obj_t *b = lv_obj_create(s_box);
         lv_obj_remove_style_all(b);
@@ -158,7 +163,9 @@ static void build(lv_obj_t *parent, int top, int h, int w, char labels[][MUSE_OP
         lv_obj_t *l = lv_label_create(b);
         lv_obj_set_style_text_font(l, &lv_font_unscii_16, 0);
         lv_obj_set_style_text_color(l, lv_color_hex(COLOR_TEXT), 0);
-        lv_label_set_text(l, labels[i]);
+        /* unscii-16 is ASCII: curly quotes and accents as the captions draw them. */
+        char shown[MUSE_OPTIONS_LABEL_MAX * 2 + 1];
+        lv_label_set_text(l, muse_text_showable(labels[i], shown, sizeof(shown)));
         lv_obj_center(l);
         s_buttons[i] = b;
     }
@@ -183,12 +190,19 @@ bool muse_options_frame(lv_obj_t *parent, int top, int h, int w)
     taskENTER_CRITICAL(&s_lock);
     uint32_t version = s_version;
     int n = s_n;
+    int64_t set_us = s_set_us;
     bool fresh = version != s_shown_version;
     if (fresh) {
         memcpy(labels, s_labels, sizeof(labels));
     }
     taskEXIT_CRITICAL(&s_lock);
-    if (fresh && mode == MUSE_MODE_IDLE) {
+    muse_options_step_t step = fresh ? muse_options_step(mode == MUSE_MODE_IDLE, mode == MUSE_MODE_LISTENING,
+                                                         (float)(now - set_us) / 1e6f)
+                                     : MUSE_OPTIONS_WAIT;
+    if (step == MUSE_OPTIONS_DROP) {
+        s_shown_version = version;   /* came with a reply a press cut off, or went stale */
+        ESP_LOGI(TAG, "options dropped (%s)", mode == MUSE_MODE_LISTENING ? "talk" : "stale");
+    } else if (step == MUSE_OPTIONS_SHOW) {
         /* Waiting for an idle gadget: after a reply's speech, not over it. */
         s_shown_version = version;
         build(parent, top, h, w, labels, n);

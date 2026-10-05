@@ -633,6 +633,24 @@ static void test_parse_options(void)
     CHECK(!options("{\"options\":[\"a\",\"b\"],\"seconds\":60}", l, &n, err) && strstr(err, "seconds"));
 }
 
+/* Review fixes: a set waiting for the gadget to go idle. */
+static void test_options_step(void)
+{
+    CHECK(muse_options_step(true, false, 1) == MUSE_OPTIONS_SHOW);
+    CHECK(muse_options_step(false, false, 20) == MUSE_OPTIONS_WAIT);   /* mid-reply: after the speech */
+    /* A talk press drops a set offered with the reply it cut off. */
+    CHECK(muse_options_step(false, true, 5) == MUSE_OPTIONS_DROP);
+    /* A set that waited too long is stale. */
+    CHECK(muse_options_step(true, false, MUSE_OPTIONS_WAIT_MAX_S + 1) == MUSE_OPTIONS_DROP);
+    CHECK(muse_options_step(false, false, MUSE_OPTIONS_WAIT_MAX_S + 1) == MUSE_OPTIONS_DROP);
+    /* Muse's tool layer may send the list as a JSON string. */
+    char l[MUSE_OPTIONS_MAX][MUSE_OPTIONS_LABEL_MAX + 1];
+    int n;
+    char err[160];
+    CHECK(options("{\"options\":\"[\\\"Yes\\\",\\\"No\\\"]\"}", l, &n, err) && n == 2 && !strcmp(l[1], "No"));
+    CHECK(!options("{\"options\":\"[\\\"only\\\"]\"}", l, &n, err));
+}
+
 static void test_options_message(void)
 {
     char out[MUSE_OPTIONS_MSG_MAX];
@@ -670,6 +688,7 @@ int main(void)
     test_reaction_amount();
     test_react_result();
     test_parse_options();
+    test_options_step();
     test_options_message();
     if (failures) {
         fprintf(stderr, "%d check(s) failed\n", failures);

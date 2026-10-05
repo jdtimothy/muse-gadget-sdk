@@ -22,6 +22,7 @@
  * dependencies, so the host tests can use it.
  */
 
+#include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -30,6 +31,21 @@
 #define MUSE_OPTIONS_LABEL_MAX 24                        /* bytes of UTF-8 */
 #define MUSE_OPTIONS_TAG " [tapped on the gadget]"         /* how Muse knows a tap came from here */
 #define MUSE_OPTIONS_MSG_MAX (MUSE_OPTIONS_LABEL_MAX + sizeof(MUSE_OPTIONS_TAG))
+
+#define MUSE_OPTIONS_WAIT_MAX_S 180   /* a set not shown by then is stale */
+
+typedef enum { MUSE_OPTIONS_WAIT, MUSE_OPTIONS_SHOW, MUSE_OPTIONS_DROP } muse_options_step_t;
+
+/* What to do with a set waiting `waited_s` to show: show it once the gadget
+ * is idle; drop it on a talk press (it came with the reply that press cut
+ * off) or once it's stale; otherwise keep waiting, as during a reply. */
+static inline muse_options_step_t muse_options_step(bool idle, bool talking, float waited_s)
+{
+    if (talking || waited_s > MUSE_OPTIONS_WAIT_MAX_S) {
+        return MUSE_OPTIONS_DROP;
+    }
+    return idle ? MUSE_OPTIONS_SHOW : MUSE_OPTIONS_WAIT;
+}
 
 /* What a tap on `label` sends Muse: the label, then the tag. */
 static inline void muse_options_message(char *out, size_t cap, const char *label)
