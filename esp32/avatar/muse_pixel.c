@@ -6,6 +6,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Reactions (avatar.react): ours, in components/muse, kept out of this file. */
+#include "muse_reaction_colors.inc"
+
 #define W MUSE_PX_W
 #define H MUSE_PX_H
 #define TAU 6.2831853f
@@ -44,6 +47,7 @@ enum {
     C_SHADOW,
     C_HEART,
     C_WHITE,
+    REACT_COLOR_IDS
     C_COUNT,
 };
 
@@ -89,6 +93,7 @@ static const uint32_t FIXED[C_COUNT] = {
     [C_SHADOW] = 0x16101f,
     [C_HEART] = 0xff4f8b,
     [C_WHITE] = 0xffffff,
+    REACT_COLOR_VALUES
 };
 
 static rgb_t s_scheme[5];      /* live, blended: f0..f3, acc */
@@ -827,6 +832,8 @@ static void draw_alert(int x, int y)
     stamp(BANG, 6, x - 2, y, C_ACC, C_ACC);
 }
 
+#include "muse_reactions.inc"
+
 /* ---------------------------------------------------------------------------
  * Frame
  * ------------------------------------------------------------------------- */
@@ -896,7 +903,7 @@ void muse_pixel_render(const muse_pose_t *p)
     float level = p->level;
     float t = p->t;
 
-    update_palette(&SCHEMES[mode], dt);
+    update_palette(react_scheme(p, &SCHEMES[mode]), dt);
     float blink = eyes_update(p, dt);
 
     memset(s_fb, C_BG, sizeof(s_fb));
@@ -925,6 +932,7 @@ void muse_pixel_render(const muse_pose_t *p)
     if (happy > 0) {
         hop = fabsf(sinf(t * 9.0f)) * 3.0f * happy;
     }
+    react_motion(p, &bob, &lean, &hop);
 
     /* Boot: the avatar pops up from a squash, then opens their eyes. */
     float boot = mode == MUSE_MODE_BOOT ? clampf(p->mode_t / 1.4f, 0, 1) : 1.0f;
@@ -957,6 +965,8 @@ void muse_pixel_render(const muse_pose_t *p)
                     : mode == MUSE_MODE_SPEAKING ? 1.5f : 0.6f;
     int spk_count = mode == MUSE_MODE_BOOT ? (int)(boot * 6) : (int)(6 * fade);
     draw_sparkles(p, j.cx, j.cy, false, spk_speed, spk_count);
+
+    react_prop_back(p, &j);
 
     /* ---- limbs ---- */
     float base = j.cy + j.b;
@@ -1005,6 +1015,7 @@ void muse_pixel_render(const muse_pose_t *p)
         break;
     }
     }
+    react_arms(p, &j, arms);
     draw_avatar(&j, arms, feet);
 
     /* ---- face ---- */
@@ -1047,8 +1058,10 @@ void muse_pixel_render(const muse_pose_t *p)
         mouth = MOUTH_GRIN;
     }
 
-    draw_eye(j.fx - eye_dx, eye_y, open, style, s_eyes.gx, s_eyes.gy);
-    draw_eye(j.fx + eye_dx, eye_y, open, style, s_eyes.gx, s_eyes.gy);
+    if (!react_eyes(p, j.fx - eye_dx, j.fx + eye_dx, eye_y, open, s_eyes.gx, s_eyes.gy)) {
+        draw_eye(j.fx - eye_dx, eye_y, open, style, s_eyes.gx, s_eyes.gy);
+        draw_eye(j.fx + eye_dx, eye_y, open, style, s_eyes.gx, s_eyes.gy);
+    }
 
     /* Tiny brows for the expressive states. */
     int bl = iround(j.fx - eye_dx), br = iround(j.fx + eye_dx), by = iround(eye_y) - 4;
@@ -1059,12 +1072,16 @@ void muse_pixel_render(const muse_pose_t *p)
         px(bl - 1, by - 1, C_BROW); px(bl, by - 1, C_BROW);
         px(br - 1, by - 1, C_BROW); px(br, by - 1, C_BROW);
     }
+    react_brows(p, bl, br, by);
 
     float blush = 0.55f + happy * 0.45f + (mode == MUSE_MODE_SPEAKING ? 0.15f : 0.0f);
+    blush = react_blush(p, blush);
     draw_blush(iround(j.fx - j.fa * 0.72f), iround(eye_y + 2), blush);
     draw_blush(iround(j.fx + j.fa * 0.72f), iround(eye_y + 2), blush);
 
-    draw_mouth(iround(j.fx), iround(eye_y + 3), mouth, mouth_open);
+    if (!react_mouth(p, iround(j.fx), iround(eye_y + 3))) {
+        draw_mouth(iround(j.fx), iround(eye_y + 3), mouth, mouth_open);
+    }
 
     /* ---- foreground ---- */
     draw_sparkles(p, j.cx, j.cy, true, spk_speed, spk_count);
@@ -1082,5 +1099,6 @@ void muse_pixel_render(const muse_pose_t *p)
     if (mode == MUSE_MODE_ERROR) {
         draw_alert(iround(j.cx + 18), iround(top - 1));
     }
+    react_prop_front(p, &j);
 
 }

@@ -38,6 +38,9 @@ typedef struct {
     float mode_t;    /* seconds in current mode */
     float level;     /* 0..1 live audio level */
     float happy;     /* 0..1 pet reaction */
+    int reaction;         /* avatar.react's (muse_reactions.h), 0 = none */
+    float react_t;        /* seconds into it */
+    float react_amount;   /* 0..1, as it comes and goes */
 } muse_pose_t;
 
 /* Accent colour of a mode (for the surrounding UI), as 0xRRGGBB. */
