@@ -44,6 +44,7 @@
 
 #include "cJSON.h"
 #include "muse_gadget_sound.h"
+#include "muse_reactions.h"
 
 /* ---- Pure (host-tested) ---- */
 
@@ -676,6 +677,54 @@ static void hello_text(char *out, size_t cap, const char *name)
     }
     snprintf(out, cap, "Hi, I'm %.*s.", (int)(n > GADGET_VOICE_NAME_MAX ? GADGET_VOICE_NAME_MAX : n), name);
     utf8_trim(out);
+}
+
+/* Checks avatar.react's {name, seconds} into *id (MUSE_REACT_NONE clears) and
+ * *secs. A missing, wrong or unknown parameter is refused, saying why in err. */
+static bool parse_react(const cJSON *params, int *id, int *secs, char *err, size_t cap)
+{
+    *id = -1;
+    *secs = MUSE_REACT_SECS_DEFAULT;
+    if (cJSON_IsObject(params)) {
+        const cJSON *v;
+        cJSON_ArrayForEach(v, params) {
+            if (!strcmp(v->string, "name")) {
+                if (!cJSON_IsString(v) || (*id = muse_reaction_find(v->valuestring)) < 0) {
+                    snprintf(err, cap, "name must be " MUSE_REACTION_NAMES_TEXT ", or none to clear");
+                    return false;
+                }
+            } else if (!strcmp(v->string, "seconds")) {
+                if (!whole_in(v, 1, MUSE_REACT_SECS_MAX)) {
+                    snprintf(err, cap, "seconds must be a whole number from 1 to %d", MUSE_REACT_SECS_MAX);
+                    return false;
+                }
+                *secs = (int)v->valuedouble;
+            } else {
+                char name[41];
+                snprintf(name, sizeof(name), "%.40s", v->string);
+                utf8_trim(name);
+                snprintf(err, cap, "unknown parameter %s: use name and seconds", name);
+                return false;
+            }
+        }
+    }
+    if (*id < 0) {
+        snprintf(err, cap, "name is required: " MUSE_REACTION_NAMES_TEXT ", or none to clear");
+        return false;
+    }
+    return true;
+}
+
+/* avatar.react's answer: the reaction now showing, and for how long. */
+static cJSON *react_result(int id, int secs)
+{
+    cJSON *p;
+    cJSON *result = gadget_ok(&p);
+    cJSON_AddStringToObject(p, "reaction", MUSE_REACTION_NAMES[id]);
+    if (id != MUSE_REACT_NONE) {
+        cJSON_AddNumberToObject(p, "seconds", secs);
+    }
+    return result;
 }
 
 /* ---- Device ---- */

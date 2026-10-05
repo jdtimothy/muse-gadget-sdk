@@ -24,6 +24,7 @@
 
 #include "cJSON.h"
 #include "muse_gadget_sound.h"
+#include "muse_reactions.h"
 #include "gadget_pure.inc"
 
 static int failures;
@@ -500,6 +501,94 @@ static void test_hello_text(void)
     CHECK(valid_utf8(small));
 }
 
+/* parse_react on parsed JSON. */
+static bool react(const char *json, int *id, int *secs, char *err)
+{
+    cJSON *p = NULL;
+    if (json) {
+        p = cJSON_Parse(json);
+        if (!p) {
+            fprintf(stderr, "bad test JSON: %s\n", json);
+            exit(2);
+        }
+    }
+    err[0] = '\0';
+    bool ok = parse_react(p, id, secs, err, 256);
+    cJSON_Delete(p);
+    return ok;
+}
+
+static void test_parse_react(void)
+{
+    int id, secs;
+    char err[256];
+    CHECK(react("{\"name\":\"rainy\"}", &id, &secs, err) && id == MUSE_REACT_RAINY && secs == 4);
+    CHECK(react("{\"name\":\"Rainy\",\"seconds\":10}", &id, &secs, err) && id == MUSE_REACT_RAINY && secs == 10);
+    CHECK(react("{\"name\":\"none\"}", &id, &secs, err) && id == MUSE_REACT_NONE);
+    for (int i = 1; i < MUSE_REACT_COUNT; i++) {
+        char j[64];
+        snprintf(j, sizeof(j), "{\"name\":\"%s\"}", MUSE_REACTION_NAMES[i]);
+        CHECK(react(j, &id, &secs, err) && id == i);
+    }
+    CHECK(react("{\"name\":\"love\",\"seconds\":1}", &id, &secs, err) && secs == 1);
+    CHECK(react("{\"name\":\"love\",\"seconds\":30}", &id, &secs, err) && secs == 30);
+    CHECK(!react("{\"name\":\"love\",\"seconds\":0}", &id, &secs, err) && strstr(err, "seconds"));
+    CHECK(!react("{\"name\":\"love\",\"seconds\":31}", &id, &secs, err) && strstr(err, "30"));
+    CHECK(!react("{\"name\":\"love\",\"seconds\":2.5}", &id, &secs, err));
+    CHECK(!react("{\"name\":\"love\",\"seconds\":\"5\"}", &id, &secs, err));
+    CHECK(!react("{\"name\":\"dance\"}", &id, &secs, err) && strstr(err, "love") && strstr(err, "rainbow") &&
+          strstr(err, "none"));
+    CHECK(!react("{\"name\":5}", &id, &secs, err) && strstr(err, "name"));
+    CHECK(!react("{}", &id, &secs, err) && strstr(err, "name"));
+    CHECK(!react(NULL, &id, &secs, err) && strstr(err, "name"));
+    /* A misspelled parameter is refused, not ignored. */
+    CHECK(!react("{\"name\":\"love\",\"secs\":3}", &id, &secs, err) && strstr(err, "secs"));
+}
+
+static void test_reaction_names(void)
+{
+    CHECK(MUSE_REACT_COUNT == 22);
+    CHECK(!strcmp(MUSE_REACTION_NAMES[MUSE_REACT_NONE], "none"));
+    for (int i = 1; i < MUSE_REACT_COUNT; i++) {
+        CHECK(strstr(MUSE_REACTION_NAMES_TEXT, MUSE_REACTION_NAMES[i]) != NULL);
+        CHECK(muse_reaction_find(MUSE_REACTION_NAMES[i]) == i);
+    }
+    CHECK(muse_reaction_find("NONE") == MUSE_REACT_NONE);
+    CHECK(muse_reaction_find("dance") == -1);
+}
+
+static bool near(float a, float b)
+{
+    return a > b - 0.001f && a < b + 0.001f;
+}
+
+static void test_reaction_amount(void)
+{
+    CHECK(near(muse_reaction_amount(-0.1f, 4), 0));
+    CHECK(near(muse_reaction_amount(0, 4), 0));
+    CHECK(near(muse_reaction_amount(0.125f, 4), 0.5f));   /* half way in */
+    CHECK(near(muse_reaction_amount(1, 4), 1));
+    CHECK(near(muse_reaction_amount(3.8f, 4), 0.5f));     /* half way out */
+    CHECK(near(muse_reaction_amount(4, 4), 0));
+    CHECK(near(muse_reaction_amount(9, 4), 0));
+    CHECK(muse_reaction_amount(0.5f, 1) > 0.99f);         /* a 1 s reaction still reaches full */
+}
+
+static void test_react_result(void)
+{
+    cJSON *r = react_result(MUSE_REACT_RAINY, 4);
+    cJSON *p = cJSON_GetObjectItem(r, "payload");
+    CHECK(cJSON_IsTrue(cJSON_GetObjectItem(r, "ok")));
+    CHECK(!strcmp(cJSON_GetObjectItem(p, "reaction")->valuestring, "rainy"));
+    CHECK(cJSON_GetObjectItem(p, "seconds")->valueint == 4);
+    cJSON_Delete(r);
+    r = react_result(MUSE_REACT_NONE, 4);
+    p = cJSON_GetObjectItem(r, "payload");
+    CHECK(!strcmp(cJSON_GetObjectItem(p, "reaction")->valuestring, "none"));
+    CHECK(!cJSON_GetObjectItem(p, "seconds"));
+    cJSON_Delete(r);
+}
+
 int main(void)
 {
     test_parse_settings();
@@ -519,6 +608,10 @@ int main(void)
     test_chime_names();
     test_sound_results();
     test_hello_text();
+    test_parse_react();
+    test_reaction_names();
+    test_reaction_amount();
+    test_react_result();
     if (failures) {
         fprintf(stderr, "%d check(s) failed\n", failures);
         return 1;
