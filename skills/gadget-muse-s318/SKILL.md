@@ -3,8 +3,9 @@ name: gadget-muse-s318
 description: >-
   Use the user's Muse Gadget, a desk companion on a Waveshare ESP32-S3 1.8" AMOLED
   running the Muse Gadget SDK: read or change its volume, mute, brightness and screen
-  sleep, report its battery, switch the voice it speaks in, show a picture on its
-  screen, and scan the home network through it.
+  sleep, report its battery, switch the voice it speaks in, make it say things aloud,
+  play sound clips and chimes, show a picture on its screen, and scan the home
+  network through it.
 ---
 
 # Muse Gadget (s318)
@@ -59,6 +60,44 @@ and `voice`: the voice's name, or its ElevenLabs ID if none has been chosen with
   wait a few seconds and retry once.
 - When asked which voices there are, give the short names (the part before " - "),
   not the whole descriptions.
+- After switching, the gadget says hello in the new voice by itself. Don't
+  announce the switch with `voice.say` as well.
+
+### voice.say
+
+Says `text` (1-600 bytes) aloud in the gadget's current voice, with the text as
+the caption (`caption: false` hides it). It answers at once with
+`{"queued": true, "position": n}`, and the gadget speaks once it's idle, after
+any reply it's in the middle of. A press of its talk button cuts it off.
+
+- Use it for announcements the user asks for from elsewhere ("tell the gadget to
+  say dinner's ready"), and for reminders they set.
+- When the user is talking to you through the gadget, just reply: your reply is
+  already spoken. Never repeat your reply through `voice.say`.
+- Keep it short, as speech: one or two sentences, no lists or links.
+- `muted` means the speaker is off. With a caption, the text is shown on the
+  screen instead. Tell the user it's muted. Don't unmute or raise the volume to
+  be heard unless they ask.
+- `unavailable`: the gadget has no ElevenLabs key. `busy`: four sounds are
+  already waiting. Try again a little later.
+
+### audio.chime
+
+Plays a built-in sound: `ding`, `success`, `error`, `alert`, `timer` or `tada`.
+Queued like `voice.say`.
+
+- `success` or `error` after an action the user asked for, if a sound fits.
+- `timer` when a countdown the user set is up.
+- `alert` for something that needs them now. `tada` for celebrations. `ding`
+  for a gentle nudge.
+- Don't play chimes the user didn't ask for or clearly expect.
+
+### audio.play_url
+
+Plays an MP3 from an `https://` URL: at most 1 MB and 60 s, which cuts longer
+clips off. Queued like `voice.say`. Only use URLs the user gives you, or
+well-known public sound clips. If it can't play the clip, the gadget shows
+"COULDN'T PLAY THE CLIP"; you won't hear about it, so don't promise it played.
 
 ### device.health
 
@@ -88,6 +127,7 @@ Scans the home network (it can take up to 90 s) for devices Home Link can reach.
 ## Limits
 
 - Settings apply at once and survive restarts.
-- A new voice takes effect from the next reply. It can't preview itself yet.
-- The gadget can't play arbitrary sounds or show reactions yet. Don't promise
-  either.
+- A new voice takes effect from the next reply, and says hello once it's chosen.
+- Sounds play one after another, after any reply in progress. The talk button
+  stops them.
+- The gadget can't show reactions yet. Don't promise them.
