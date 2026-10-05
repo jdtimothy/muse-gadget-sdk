@@ -122,7 +122,7 @@ class MuseGadgetCmdsSourceTest(unittest.TestCase):
         start = source.index("void muse_gadget_add_commands(")
         body = source[start:source.index("\n}\n", start)]
         text = "".join(re.findall(r'"((?:[^"\\]|\\.)*)"', body))
-        self.assertLess(len(text), 1600, text)
+        self.assertLess(len(text), 2000, text)
 
     def test_player_is_built(self):
         cmake = (ROOT / "components/muse/CMakeLists.txt").read_text()
@@ -169,6 +169,16 @@ class MuseGadgetCmdsSourceTest(unittest.TestCase):
             source = (ROOT / path).read_text()
             for call in re.findall(r"ESP_LOG\w\(.*?\);", source, re.S):
                 self.assertNotIn("API_KEY", call, f"{path}: {call}")
+
+    def test_react_is_advertised_and_dispatched_without_spoken_replies(self):
+        source = SOURCE.read_text()
+        add = source[source.index("void muse_gadget_add_commands("):]
+        add = add[:add.index("#if CONFIG_MUSE_HATCH")]
+        self.assertIn('"avatar.react"', add)
+        body = source[source.index("cJSON *muse_gadget_command("):]
+        body = body[:body.index("#if CONFIG_MUSE_HATCH")]
+        self.assertIn('"avatar.react"', body)
+        self.assertIn("react_command(params)", body)
 
     def test_voice_and_sound_commands_need_spoken_replies(self):
         source = SOURCE.read_text()

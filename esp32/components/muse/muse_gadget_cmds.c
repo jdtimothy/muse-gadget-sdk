@@ -19,6 +19,7 @@
  * link.register and answered from on_ws_command() (main/app.c):
  *   device.settings  read or change volume, mute, brightness and screen
  *                    sleep; reports them with the battery and voice
+ *   avatar.react     show a reaction on the avatar for a few seconds
  *   voice.select     list the ElevenLabs voices, or switch to one (async)
  *   voice.say        say text aloud, captioned
  *   audio.play_url   play an MP3 clip
@@ -743,6 +744,7 @@ static cJSON *react_result(int id, int secs)
 #include "muse_tts_elevenlabs.h"
 #endif
 
+#include "muse_gadget_react.h"
 #include "muse_settings.h"
 #include "muse_state.h"
 
@@ -792,6 +794,18 @@ static cJSON *settings_command(const cJSON *params)
 #endif
     return settings_result(&s, power.battery_pct, power.charging, power.usb,
                            voice_label(voice, voice_id));
+}
+
+/* avatar.react: drawn from the next frame, so nothing waits. */
+static cJSON *react_command(const cJSON *params)
+{
+    int id, secs;
+    char err[256];
+    if (!parse_react(params, &id, &secs, err, sizeof(err))) {
+        return gadget_error("invalid_params", err);
+    }
+    muse_react_set(id, secs);
+    return react_result(id, secs);
 }
 
 #if CONFIG_MUSE_HATCH
@@ -968,6 +982,9 @@ void muse_gadget_add_commands(cJSON *commands)
                 "Read or change volume, mute, brightness and screen sleep. "
                 "Reports them all, with the battery and voice.",
                 NULL, opt);
+    add_command(commands, "avatar.react", "Show a reaction on the avatar for a few seconds.",
+                one_param("name", "string", MUSE_REACTION_NAMES_TEXT ", or none to clear."),
+                one_param("seconds", "integer", "1-30, default 4."));
 #if CONFIG_MUSE_HATCH
     cJSON *vopt = cJSON_CreateObject();
     cJSON_AddItemToObject(vopt, "name", param("string", "Voice to switch to; without it, lists them."));
@@ -989,6 +1006,9 @@ cJSON *muse_gadget_command(const char *command, cJSON *params, const char *reque
 {
     if (!strcmp(command, "device.settings")) {
         return settings_command(params);
+    }
+    if (!strcmp(command, "avatar.react")) {
+        return react_command(params);
     }
 #if CONFIG_MUSE_HATCH
     if (!strcmp(command, "voice.select")) {

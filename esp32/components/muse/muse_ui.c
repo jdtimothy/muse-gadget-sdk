@@ -44,6 +44,9 @@
 #include "muse_state.h"
 #include "muse_text.h"
 #include "muse_wifi.h"
+#if CONFIG_MUSE_GADGET_COMMANDS
+#include "muse_gadget_react.h"
+#endif
 #if CONFIG_MUSE_WATCHER_CAMERA
 #include "boards/watcher_camera.h"
 #endif
@@ -1519,6 +1522,9 @@ static void frame_tick(lv_timer_t *timer)
         .level = s_level,
         .happy = muse_state_happiness(),
     };
+#if CONFIG_MUSE_GADGET_COMMANDS
+    pose.reaction = muse_react_pose(&pose.react_t, &pose.react_amount);
+#endif
     muse_pixel_render(&pose);
     invalidate_muse();
 

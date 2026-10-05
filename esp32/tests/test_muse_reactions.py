@@ -63,6 +63,17 @@ class MuseReactionsSourceTest(unittest.TestCase):
         self.assertTrue(PIXEL.read_text().startswith("// Copyright (c) Meta Platforms, Inc. and affiliates."))
         self.assertNotIn("Apache", PIXEL.read_text()[:400])
 
+    def test_ui_passes_the_reaction(self):
+        ui = (ROOT / "components/muse/muse_ui.c").read_text()
+        self.assertRegex(ui, r'#if CONFIG_MUSE_GADGET_COMMANDS\s*\n#include "muse_gadget_react.h"\s*\n#endif')
+        self.assertRegex(
+            ui, r"#if CONFIG_MUSE_GADGET_COMMANDS\s*\n\s*pose\.reaction = muse_react_pose\(&pose\.react_t, "
+                r"&pose\.react_amount\);\s*\n#endif\s*\n\s*muse_pixel_render\(&pose\);")
+
+    def test_react_module_is_built(self):
+        cmake = (ROOT / "components/muse/CMakeLists.txt").read_text()
+        self.assertIn('"muse_gadget_react.c"', cmake)
+
     def test_pose_fields(self):
         header = (ROOT / "components/muse/muse_pixel.h").read_text()
         for field in ("int reaction;", "float react_t;", "float react_amount;"):
