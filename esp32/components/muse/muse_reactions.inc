@@ -560,11 +560,20 @@ static bool react_eyes(const muse_pose_t *p, float lx, float rx, float ey, float
     return true;
 }
 
-static void react_brows(const muse_pose_t *p, int bl, int br, int by)
+/* Thinking's dots sit above the head on the right, where front props go:
+ * while one shows, the dots make way. */
+static bool react_hides_dots(const muse_pose_t *p)
+{
+    const reaction_t *r = react_row(p);
+    return r && r->front;
+}
+
+/* Draws the reaction's brows in place of the mode's; false leaves them to the mode. */
+static bool react_brows(const muse_pose_t *p, int bl, int br, int by)
 {
     const reaction_t *r = react_face_row(p);
-    if (!r) {
-        return;
+    if (!r || r->brows == RB_NONE) {
+        return false;
     }
     switch (r->brows) {
     case RB_UP:
@@ -584,8 +593,9 @@ static void react_brows(const muse_pose_t *p, int bl, int br, int by)
         px(br - 1, by - 1, C_BROW); px(br, by - 2, C_BROW);
         break;
     default:
-        break;
+        return false;
     }
+    return true;
 }
 
 static float react_blush(const muse_pose_t *p, float blush)

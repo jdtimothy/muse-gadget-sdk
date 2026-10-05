@@ -146,9 +146,42 @@ static void test_sun_rays_ring_the_sun(void)
     }
 }
 
+static int count(uint8_t c)
+{
+    int n = 0;
+    for (int i = 0; i < W * H; i++) {
+        n += s_fb[i] == c;
+    }
+    return n;
+}
+
+/* Review fix: in thinking and listening a reaction's brows replace the mode's
+ * (one pair, two pixels each), and its front prop clears the thought dots. */
+static void test_reaction_brows_replace_the_modes(void)
+{
+    static const muse_mode_t MODES[] = { MUSE_MODE_THINKING, MUSE_MODE_LISTENING, MUSE_MODE_IDLE };
+    for (size_t m = 0; m < sizeof(MODES) / sizeof(MODES[0]); m++) {
+        for (int r = 1; r < MUSE_REACT_COUNT; r++) {
+            if (REACTIONS[r].brows == RB_NONE) {
+                continue;
+            }
+            render(MODES[m], r, 0, 0);
+            CHECK(count(C_BROW) <= 4, "%s in mode %d draws %d brow pixels", MUSE_REACTION_NAMES[r],
+                  (int)MODES[m], count(C_BROW));
+        }
+    }
+    muse_pose_t p = { .mode = MUSE_MODE_THINKING, .t = 1, .reaction = MUSE_REACT_CONFUSED, .react_amount = 1 };
+    CHECK(react_hides_dots(&p), "the ? and the thought dots share a corner");
+    p.reaction = MUSE_REACT_SUNNY;
+    CHECK(!react_hides_dots(&p), "no front prop: the dots stay");
+    p.reaction = MUSE_REACT_NONE;
+    CHECK(!react_hides_dots(&p), "no reaction");
+}
+
 int main(void)
 {
     test_table();
+    test_reaction_brows_replace_the_modes();
     test_sun_rays_ring_the_sun();
     test_each_reaction_shows();
     test_some_modes_ignore_reactions();

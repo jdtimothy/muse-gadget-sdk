@@ -72,7 +72,7 @@ def render(out):
 
 
 def tile(name, frames, size):
-    label = name.replace("speaking-", "speaking + ")
+    label = name.replace("speaking-", "speaking + ").replace("thinking-", "thinking + ")
     return (f'<figure class="tile"><div class="anim" style="--frames:{frames};--dur:{frames * FRAME_MS}ms">'
             f'<img src="{name}.png" alt="{label}" width="{size * frames}" height="{size}"></div>'
             f'<figcaption>{label}</figcaption></figure>')
@@ -118,6 +118,9 @@ figcaption {{ margin-top: 6px; font-size: 14px; text-align: center; }}
 <h2>Reactions while speaking</h2>
 <p>The face, glow and prop show; the mouth keeps talking.</p>
 <div class="grid">{blends}</div>
+<h2>Reactions while thinking</h2>
+<p>Muse often reacts while it's still working on a reply. The reaction's face replaces the thinking face, and its prop takes the thought dots' place.</p>
+<div class="grid">{thinks}</div>
 </main>
 """
 
@@ -132,10 +135,12 @@ def main():
         sys.exit((e.stdout or "") + (e.stderr or "") + "react_anim doesn't build or run")
     by = {a[0]: a for a in anims}
     reference = "".join(tile(*by[n]) for n in REFERENCE)
-    reactions = "".join(tile(*a) for a in anims if a[0] not in REFERENCE and not a[0].startswith("speaking-"))
+    blend = ("speaking-", "thinking-")
+    reactions = "".join(tile(*a) for a in anims if a[0] not in REFERENCE and not a[0].startswith(blend))
     blends = "".join(tile(*a) for a in anims if a[0].startswith("speaking-"))
+    thinks = "".join(tile(*a) for a in anims if a[0].startswith("thinking-"))
     with open(os.path.join(out, "gallery.html"), "w", encoding="utf-8") as f:
-        f.write(PAGE.format(reference=reference, reactions=reactions, blends=blends))
+        f.write(PAGE.format(reference=reference, reactions=reactions, blends=blends, thinks=thinks))
     print(os.path.join(out, "gallery.html"))
     for name, frames, _ in anims:
         print(f"{name}.png  ({frames} frames)")

@@ -139,5 +139,13 @@ int main(int argc, char **argv)
         anim_t an = { name, MUSE_MODE_SPEAKING, secs, 0, .talky = true, .reaction = BLENDS[i] };
         play(dir, &an, base);
     }
+    /* Muse calls tools while it thinks, so many reactions arrive then. */
+    static const int THINKS[] = { MUSE_REACT_SURPRISED, MUSE_REACT_CONFUSED, MUSE_REACT_SAD, MUSE_REACT_RAINY };
+    for (size_t i = 0; i < sizeof(THINKS) / sizeof(THINKS[0]); i++, base += 100) {
+        char name[48];
+        snprintf(name, sizeof(name), "thinking-%s", MUSE_REACTION_NAMES[THINKS[i]]);
+        anim_t an = { name, MUSE_MODE_THINKING, secs, 0, .reaction = THINKS[i] };
+        play(dir, &an, base);
+    }
     return 0;
 }

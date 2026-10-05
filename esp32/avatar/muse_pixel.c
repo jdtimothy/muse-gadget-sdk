@@ -1065,6 +1065,7 @@ void muse_pixel_render(const muse_pose_t *p)
 
     /* Tiny brows for the expressive states. */
     int bl = iround(j.fx - eye_dx), br = iround(j.fx + eye_dx), by = iround(eye_y) - 4;
+    if (!react_brows(p, bl, br, by)) {
     if (mode == MUSE_MODE_THINKING) {
         px(bl - 1, by + 1, C_BROW); px(bl, by + 1, C_BROW);
         px(br - 1, by, C_BROW); px(br, by - 1, C_BROW);
@@ -1072,7 +1073,7 @@ void muse_pixel_render(const muse_pose_t *p)
         px(bl - 1, by - 1, C_BROW); px(bl, by - 1, C_BROW);
         px(br - 1, by - 1, C_BROW); px(br, by - 1, C_BROW);
     }
-    react_brows(p, bl, br, by);
+    }
 
     float blush = 0.55f + happy * 0.45f + (mode == MUSE_MODE_SPEAKING ? 0.15f : 0.0f);
     blush = react_blush(p, blush);
@@ -1090,7 +1091,7 @@ void muse_pixel_render(const muse_pose_t *p)
     if (mode == MUSE_MODE_LISTENING || mode == MUSE_MODE_SPEAKING) {
         draw_waves(j.cx, j.fy + 2, j.a, level, t);
     }
-    if (mode == MUSE_MODE_THINKING) {
+    if (mode == MUSE_MODE_THINKING && !react_hides_dots(p)) {
         draw_thought_dots(j.cx + 14, top + 2, t);
     }
     if (happy > 0) {

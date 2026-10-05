@@ -52,7 +52,8 @@ class MuseReactionsSourceTest(unittest.TestCase):
         for hook in ('#include "muse_reaction_colors.inc"', "REACT_COLOR_IDS", "REACT_COLOR_VALUES",
                      '#include "muse_reactions.inc"', "update_palette(react_scheme(p, &SCHEMES[mode]), dt);",
                      "react_motion(p, &bob, &lean, &hop);", "react_arms(p, &j, arms);",
-                     "react_prop_back(p, &j);", "react_eyes(p, ", "react_brows(p, bl, br, by);",
+                     "react_prop_back(p, &j);", "react_eyes(p, ", "if (!react_brows(p, bl, br, by)) {",
+                     "if (mode == MUSE_MODE_THINKING && !react_hides_dots(p)) {",
                      "blush = react_blush(p, blush);", "react_mouth(p, ", "react_prop_front(p, &j);"):
             self.assertIn(hook, src)
         # Reactions come in before the frame code, so they can use its helpers.
