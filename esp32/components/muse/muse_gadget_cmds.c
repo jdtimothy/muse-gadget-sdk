@@ -517,14 +517,57 @@ typedef struct {
     bool caption;      /* voice.say: show the text as it's said */
 } gadget_sound_t;
 
-/* A URL the player can fetch: https://, a host, no spaces or control bytes. */
+/*
+ * A URL the player can fetch: https://, characters RFC 3986 allows (anything
+ * else percent-encoded), at most one user info, a host of letters, digits,
+ * dots and hyphens, and a port of 1-65535 if any. ESP-IDF's URL parser logs
+ * a URL it refuses in full, token and all, so nothing it would refuse gets
+ * that far.
+ */
 static bool usable_url(const char *url, size_t len)
 {
     if (len <= 8 || len > MUSE_SOUND_URL_MAX || strncasecmp(url, "https://", 8)) {
         return false;
     }
     for (size_t i = 0; i < len; i++) {
-        if ((unsigned char)url[i] <= ' ' || url[i] == 0x7f) {
+        unsigned char c = (unsigned char)url[i];
+        if (!isalnum(c) && !strchr("-._~:/?#[]@!$&'()*+,;=%", c)) {
+            return false;
+        }
+    }
+    const char *host = url + 8;
+    size_t n = strcspn(host, "/?#");   /* user info, host and port */
+    const char *at = memchr(host, '@', n);
+    if (at) {
+        if (memchr(at + 1, '@', n - (size_t)(at + 1 - host))) {
+            return false;
+        }
+        n -= (size_t)(at + 1 - host);
+        host = at + 1;
+    }
+    const char *colon = memchr(host, ':', n);
+    size_t host_len = colon ? (size_t)(colon - host) : n;
+    if (!host_len) {
+        return false;
+    }
+    for (size_t i = 0; i < host_len; i++) {
+        if (!isalnum((unsigned char)host[i]) && host[i] != '.' && host[i] != '-') {
+            return false;
+        }
+    }
+    if (colon) {
+        size_t digits = n - host_len - 1;
+        long port = 0;
+        for (size_t i = 1; i <= digits; i++) {
+            if (!isdigit((unsigned char)colon[i])) {
+                return false;
+            }
+            port = port * 10 + (colon[i] - '0');
+            if (port > 65535) {
+                return false;
+            }
+        }
+        if (!digits || !port) {
             return false;
         }
     }

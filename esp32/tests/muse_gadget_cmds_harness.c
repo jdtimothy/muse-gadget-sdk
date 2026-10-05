@@ -403,6 +403,19 @@ static void test_parse_url(void)
     CHECK(!sound("audio.play_url", "{\"url\":\"https://example.com/a b.mp3\"}", &s, err));
     CHECK(!sound("audio.play_url", "{\"url\":\"https://example.com/a\\n.mp3\"}", &s, err));
     CHECK(!sound("audio.play_url", "{\"url\":7}", &s, err) && strstr(err, "string"));
+    /* Review fix: what ESP-IDF's URL parser refuses is refused here, since it
+     * logs the whole URL, token and all, when it fails. */
+    CHECK(sound("audio.play_url", "{\"url\":\"https://example.com:8443/a%20b.mp3?x=1&y=2#t\"}", &s, err));
+    CHECK(sound("audio.play_url", "{\"url\":\"https://user:pw@cdn.example.com/a.mp3\"}", &s, err));
+    CHECK(!sound("audio.play_url", "{\"url\":\"https://u:pw@x@host/a.mp3?token=1\"}", &s, err));
+    CHECK(!sound("audio.play_url", "{\"url\":\"https://host:abc/a.mp3\"}", &s, err));
+    CHECK(!sound("audio.play_url", "{\"url\":\"https://host:99999/a.mp3\"}", &s, err));
+    CHECK(!sound("audio.play_url", "{\"url\":\"https://host:/a.mp3\"}", &s, err));
+    CHECK(!sound("audio.play_url", "{\"url\":\"https://:8443/a.mp3\"}", &s, err));
+    CHECK(!sound("audio.play_url", "{\"url\":\"https://ho<st/a.mp3\"}", &s, err));
+    CHECK(!sound("audio.play_url", "{\"url\":\"https://example.com/a\\\"b.mp3\"}", &s, err));
+    CHECK(!sound("audio.play_url", "{\"url\":\"https://example.com/\xC3\xA9.mp3\"}", &s, err));
+    CHECK(!sound("audio.play_url", "{\"url\":\"https:///a.mp3\"}", &s, err));
     CHECK(!sound("audio.play_url", "{\"url\":\"https://x/a.mp3\",\"caption\":true}", &s, err) &&
           strstr(err, "caption"));
 }

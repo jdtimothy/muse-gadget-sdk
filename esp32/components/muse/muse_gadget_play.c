@@ -703,12 +703,14 @@ int muse_play_enqueue(muse_sound_kind_t kind, const char *arg, bool caption)
     job->kind = kind;
     job->caption = caption;
     memcpy(job->arg, arg, len + 1);
+    /* Counted first: once sent, the voice task may take it before a count after. */
+    int ahead = (int)uxQueueMessagesWaiting(s_jobs);
     if (xQueueSend(s_jobs, &job, 0) != pdTRUE) {
         free(job);
         return 0;
     }
     muse_state_nudge();   /* out of the voice task's resting wait */
-    return (int)uxQueueMessagesWaiting(s_jobs);
+    return ahead + 1;
 }
 
 bool muse_play_pending(void)
