@@ -31,7 +31,8 @@ reports.
 
 It always answers with the current `volume`, `muted`, `brightness`,
 `screen_sleep_s`, `battery_percent` (null with no reading), `charging`, `on_usb`
-and `voice`.
+and `voice`: the voice's name, or its ElevenLabs ID if none has been chosen with
+`voice.select` yet (`voice.select` with no parameters gives its name).
 
 - "How much battery is left?": call it with no parameters, and answer with the
   percent, adding "and charging" when `charging` is true.
@@ -47,7 +48,8 @@ and `voice`.
 
 - With no parameters, it lists `voices` (each with a `name` and maybe a
   `category`) from the user's ElevenLabs library, and the `current` one.
-  `not_listed` counts any that didn't fit.
+  `not_listed` counts any that didn't fit in the list; those can still be chosen
+  by name.
 - With `name`, it switches to that voice from the next reply on. Matching ignores
   case and accepts the start of a name ("George" for "George - Warm, Captivating
   Storyteller") or a voice ID.

@@ -218,7 +218,7 @@ static void test_voices_result(void)
 {
     gadget_voice_t v[8];
     int n = scan_voices(VOICES, strlen(VOICES), v, 8);
-    cJSON *r = voices_result(v, n, 70, "pqHfZKP75CvOlQylNhV4");
+    cJSON *r = voices_result(v, n, 70, "pqHfZKP75CvOlQylNhV4", 64);
     cJSON *p = cJSON_GetObjectItem(r, "payload");
     CHECK(cJSON_GetArraySize(cJSON_GetObjectItem(p, "voices")) == 3);
     cJSON *first = cJSON_GetArrayItem(cJSON_GetObjectItem(p, "voices"), 0);
@@ -229,7 +229,7 @@ static void test_voices_result(void)
     CHECK(cJSON_GetObjectItem(p, "not_listed")->valueint == 67);
     cJSON_Delete(r);
 
-    r = voices_result(v, n, n, "someone-else");
+    r = voices_result(v, n, n, "someone-else", 64);
     p = cJSON_GetObjectItem(r, "payload");
     CHECK(cJSON_IsNull(cJSON_GetObjectItem(p, "current")));
     CHECK(!cJSON_GetObjectItem(p, "not_listed"));
@@ -237,6 +237,90 @@ static void test_voices_result(void)
 
     r = selected_result(&v[0]);
     CHECK(!strcmp(cJSON_GetObjectItem(cJSON_GetObjectItem(r, "payload"), "voice")->valuestring, v[0].name));
+    cJSON_Delete(r);
+}
+
+static bool valid_utf8(const char *s)
+{
+    for (const unsigned char *p = (const unsigned char *)s; *p;) {
+        int need = *p < 0x80 ? 0 : (*p & 0xE0) == 0xC0 ? 1 : (*p & 0xF0) == 0xE0 ? 2 : (*p & 0xF8) == 0xF0 ? 3 : -1;
+        if (need < 0) {
+            return false;
+        }
+        p++;
+        for (int i = 0; i < need; i++, p++) {
+            if ((*p & 0xC0) != 0x80) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+/* Review fix: byte limits never split a UTF-8 character. */
+static void test_truncation_keeps_utf8_whole(void)
+{
+    char json[512] = "{\"voices\":[{\"voice_id\":\"abc\",\"name\":\"";
+    for (int i = 0; i < 40; i++) {
+        strcat(json, "\xC3\xA9");   /* é: 80 bytes, past the 64-byte name */
+    }
+    strcat(json, "\"}]}");
+    gadget_voice_t v[1];
+    CHECK(scan_voices(json, strlen(json), v, 1) == 1);
+    CHECK(valid_utf8(v[0].name) && strlen(v[0].name) == 64);
+
+    char odd[512] = "{\"voices\":[{\"voice_id\":\"abc\",\"name\":\"x";
+    for (int i = 0; i < 40; i++) {
+        strcat(odd, "\xC3\xA9");
+    }
+    strcat(odd, "\"}]}");
+    CHECK(scan_voices(odd, strlen(odd), v, 1) == 1);
+    CHECK(valid_utf8(v[0].name) && strlen(v[0].name) == 63);
+
+    char err[160];
+    gadget_settings_t s = BASE;
+    char key[256] = "{\"x";
+    for (int i = 0; i < 30; i++) {
+        strcat(key, "\xC3\xA9");
+    }
+    strcat(key, "\":1}");
+    CHECK(!parse(key, &s, err) && valid_utf8(err));
+
+    char name[80] = "x";
+    for (int i = 0; i < 30; i++) {
+        strcat(name, "\xC3\xA9");
+    }
+    char msg[512];
+    voice_choice_error(msg, sizeof(msg), v, 1, name, -1);
+    CHECK(valid_utf8(msg));
+    char small[40];
+    gadget_voice_t wide = { "id", "", "" };
+    for (int i = 0; i < 30; i++) {
+        strcat(wide.name, "\xC3\xA9");
+    }
+    voice_choice_error(small, sizeof(small), &wide, 1, "zz", -1);
+    CHECK(valid_utf8(small));
+}
+
+/* Review fix: the build's voice has no name until one is chosen; say its ID. */
+static void test_voice_label(void)
+{
+    CHECK(!strcmp(voice_label("George", "JBF"), "George"));
+    CHECK(!strcmp(voice_label("", "JBF"), "JBF"));
+    CHECK(voice_label("", "") == NULL);
+}
+
+/* Review fix: the list Muse reads is capped, but the current voice is found
+ * among every stored one. */
+static void test_voices_result_list_cap(void)
+{
+    gadget_voice_t v[8];
+    int n = scan_voices(VOICES, strlen(VOICES), v, 8);
+    cJSON *r = voices_result(v, n, n, "pqHfZKP75CvOlQylNhV4", 2);
+    cJSON *p = cJSON_GetObjectItem(r, "payload");
+    CHECK(cJSON_GetArraySize(cJSON_GetObjectItem(p, "voices")) == 2);
+    CHECK(cJSON_GetObjectItem(p, "not_listed")->valueint == 1);
+    CHECK(!strcmp(cJSON_GetObjectItem(p, "current")->valuestring, "Sarah - Mature"));
     cJSON_Delete(r);
 }
 
@@ -262,6 +346,9 @@ int main(void)
     test_voice_choice_error();
     test_voices_result();
     test_voice_fetch_error();
+    test_truncation_keeps_utf8_whole();
+    test_voice_label();
+    test_voices_result_list_cap();
     if (failures) {
         fprintf(stderr, "%d check(s) failed\n", failures);
         return 1;

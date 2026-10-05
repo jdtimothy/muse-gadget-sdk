@@ -60,6 +60,24 @@ static cJSON *gadget_ok(cJSON **payload)
     return result;
 }
 
+/* Cuts a UTF-8 sequence left unfinished at the end of s by a byte limit: Muse
+ * reads results as JSON, which must be whole UTF-8. */
+static void utf8_trim(char *s)
+{
+    size_t len = strlen(s), i = len;
+    while (i && ((unsigned char)s[i - 1] & 0xC0) == 0x80 && len - i < 3) {
+        i--;
+    }
+    if (!i || ((unsigned char)s[i - 1] & 0x80) == 0) {
+        return;   /* ASCII at the end */
+    }
+    unsigned char lead = (unsigned char)s[i - 1];
+    size_t need = lead >= 0xF0 ? 4 : lead >= 0xE0 ? 3 : lead >= 0xC0 ? 2 : 1;
+    if (len - (i - 1) < need) {
+        s[i - 1] = '\0';
+    }
+}
+
 typedef struct {
     int volume;       /* 0..100 */
     bool muted;       /* replies are captioned, not spoken */
@@ -122,7 +140,10 @@ static bool parse_settings(const cJSON *params, gadget_settings_t *s, char *err,
             }
             n.sleep_s = (int)v->valuedouble;
         } else {
-            snprintf(err, cap, "unknown parameter %.40s: use volume, muted, brightness or screen_sleep_s", k);
+            char key[41];
+            snprintf(key, sizeof(key), "%.40s", k);
+            utf8_trim(key);
+            snprintf(err, cap, "unknown parameter %s: use volume, muted, brightness or screen_sleep_s", key);
             return false;
         }
     }
@@ -157,7 +178,8 @@ static cJSON *settings_result(const gadget_settings_t *s, int battery_pct, bool 
 
 #define GADGET_VOICE_ID_MAX 32     /* ElevenLabs' are 20 */
 #define GADGET_VOICE_NAME_MAX 64
-#define GADGET_VOICES_MAX 64
+#define GADGET_VOICES_MAX 64       /* listed for Muse */
+#define GADGET_VOICES_SCAN 256     /* kept to match a name against */
 
 typedef struct {
     char id[GADGET_VOICE_ID_MAX + 1];
@@ -233,6 +255,7 @@ static bool scan_str(scan_t *s, char *out, size_t cap)
     s->p++;
     if (out && cap) {
         out[n] = '\0';
+        utf8_trim(out);
     }
     return true;
 }
@@ -382,9 +405,13 @@ static int match_voice(const gadget_voice_t *v, int n, const char *name)
 static void voice_choice_error(char *out, size_t cap, const gadget_voice_t *v, int n,
                                const char *name, int match)
 {
-    int w = match == -2 ? snprintf(out, cap, "\"%.48s\" matches several voices: ", name)
-                        : snprintf(out, cap, "no voice called \"%.48s\". Voices: ", name);
+    char said[49];
+    snprintf(said, sizeof(said), "%.48s", name);
+    utf8_trim(said);
+    int w = match == -2 ? snprintf(out, cap, "\"%s\" matches several voices: ", said)
+                        : snprintf(out, cap, "no voice called \"%s\". Voices: ", said);
     if (w < 0 || (size_t)w >= cap) {
+        utf8_trim(out);
         return;
     }
     size_t used = (size_t)w;
@@ -396,7 +423,9 @@ static void voice_choice_error(char *out, size_t cap, const gadget_voice_t *v, i
         w = snprintf(out + used, cap - used, "%s%s", first ? "" : ", ", v[i].name);
         if (w < 0 || (size_t)w >= cap - used) {
             if (cap >= 4) {
-                strcpy(out + cap - 4, "...");
+                out[cap - 4] = '\0';
+                utf8_trim(out);
+                strcat(out, "...");
             }
             return;
         }
@@ -405,24 +434,32 @@ static void voice_choice_error(char *out, size_t cap, const gadget_voice_t *v, i
     }
 }
 
-/* voice.select's list: names and categories, the current voice, and how many didn't fit. */
-static cJSON *voices_result(const gadget_voice_t *v, int stored, int total, const char *current_id)
+/*
+ * voice.select's list: the first list_max names and categories, the current
+ * voice (found among all `stored`), and how many of `total` weren't listed.
+ */
+static cJSON *voices_result(const gadget_voice_t *v, int stored, int total, const char *current_id,
+                            int list_max)
 {
     cJSON *p;
     cJSON *result = gadget_ok(&p);
     cJSON *list = cJSON_AddArrayToObject(p, "voices");
     const char *current = NULL;
+    int listed = stored < list_max ? stored : list_max;
     for (int i = 0; i < stored; i++) {
-        cJSON *item = cJSON_CreateObject();
-        cJSON_AddStringToObject(item, "name", v[i].name);
-        if (v[i].category[0]) {
-            cJSON_AddStringToObject(item, "category", v[i].category);
+        if (i < listed) {
+            cJSON *item = cJSON_CreateObject();
+            cJSON_AddStringToObject(item, "name", v[i].name);
+            if (v[i].category[0]) {
+                cJSON_AddStringToObject(item, "category", v[i].category);
+            }
+            cJSON_AddItemToArray(list, item);
         }
-        cJSON_AddItemToArray(list, item);
         if (current_id && !strcmp(v[i].id, current_id)) {
             current = v[i].name;
         }
     }
+    stored = listed;
     if (current) {
         cJSON_AddStringToObject(p, "current", current);
     } else {
@@ -432,6 +469,13 @@ static cJSON *voices_result(const gadget_voice_t *v, int stored, int total, cons
         cJSON_AddNumberToObject(p, "not_listed", total - stored);
     }
     return result;
+}
+
+/* What to call the current voice: its name, else its ID (the build's voice has
+ * no name until voice.select picks one); NULL if neither is known. */
+static const char *voice_label(const char *name, const char *id)
+{
+    return name[0] ? name : id[0] ? id : NULL;
 }
 
 static cJSON *selected_result(const gadget_voice_t *v)
@@ -519,11 +563,13 @@ static cJSON *settings_command(const cJSON *params)
                  s.muted ? " (muted)" : "", s.brightness, s.sleep_s);
     }
     muse_power_t power = muse_state_power();
+    char voice_id[GADGET_VOICE_ID_MAX + 1] = "";
     char voice[GADGET_VOICE_NAME_MAX + 1] = "";
 #if CONFIG_MUSE_HATCH
-    muse_tts_voice(NULL, voice);
+    muse_tts_voice(voice_id, voice);
 #endif
-    return settings_result(&s, power.battery_pct, power.charging, power.usb, voice);
+    return settings_result(&s, power.battery_pct, power.charging, power.usb,
+                           voice_label(voice, voice_id));
 }
 
 #if CONFIG_MUSE_HATCH
@@ -558,20 +604,20 @@ static cJSON *voice_select(const char *name)
         free(body);
         return gadget_error(code, message);
     }
-    gadget_voice_t *v = heap_caps_calloc(GADGET_VOICES_MAX, sizeof(*v), MALLOC_CAP_SPIRAM);
-    int total = v ? scan_voices(body, len, v, GADGET_VOICES_MAX) : -1;
+    gadget_voice_t *v = heap_caps_calloc(GADGET_VOICES_SCAN, sizeof(*v), MALLOC_CAP_SPIRAM);
+    int total = v ? scan_voices(body, len, v, GADGET_VOICES_SCAN) : -1;
     free(body);
     if (!v) {
         return gadget_error("out_of_memory", "no room for the voice list");
     }
-    int stored = total < GADGET_VOICES_MAX ? total : GADGET_VOICES_MAX;
+    int stored = total < GADGET_VOICES_SCAN ? total : GADGET_VOICES_SCAN;
     char current[GADGET_VOICE_ID_MAX + 1];
     muse_tts_voice(current, NULL);
     cJSON *result;
     if (total < 0) {
         result = gadget_error("network", "ElevenLabs sent a voice list the gadget can't read");
     } else if (!name[0]) {
-        result = voices_result(v, stored, total, current);
+        result = voices_result(v, stored, total, current, GADGET_VOICES_MAX);
     } else {
         int i = match_voice(v, stored, name);
         if (i < 0) {
