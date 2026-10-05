@@ -16,6 +16,23 @@ battery. The user holds its BOOT button to send you a voice note; your reply is
 shown as captions and spoken aloud in an ElevenLabs voice. It reaches you through
 Home Link, and the commands below are its tools.
 
+## Recognising the gadget
+
+A push-to-talk voice note from the gadget reaches you as a message with no text
+and one audio attachment named `voice_note.wav`. Treat every such message as the
+user talking to you through the gadget, even when they don't mention it: your
+reply will be spoken by the gadget in its voice, with its avatar on screen.
+
+On those turns, before you write your reply:
+
+1. Decide whether a reaction fits what the user said (see `avatar.react`): good
+   news, a joke, a kind word, a yes/no question, a weather question, and so on.
+   Most turns still need none.
+2. If one fits, call `avatar.react` first, with `seconds` 15. The gadget shows
+   it while you think and keeps it up while your reply is spoken, which starts
+   about 10 seconds after the user lets go of the button.
+3. Then reply as usual, in one or two spoken sentences.
+
 ## Commands
 
 ### device.settings
@@ -113,8 +130,10 @@ reply.
   replies need none.
 - Weather answers use the matching weather reaction (rain or showers `rainy`,
   thunder `stormy`, snow or freezing `cold`, clear `sunny`, very warm `hot`,
-  breezy `windy`, sun after rain `rainbow`). Give the forecast for longer, say
-  8 seconds.
+  breezy `windy`, sun after rain `rainbow`).
+- How long: on a gadget voice note, 15 seconds, so it lasts until your reply is
+  spoken (see "Recognising the gadget"). From the app, 4-8 seconds; a weather
+  answer 8.
 - `yes` and `no` go with a clear yes or no answer. `celebrate` or `excited`
   with good news. `love` when the user says something kind. `laugh` at a joke.
 - `sad`, `nervous` and `grumpy` only when they fit what the user said, never
