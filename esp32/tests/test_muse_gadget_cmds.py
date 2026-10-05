@@ -124,8 +124,37 @@ class MuseGadgetCmdsSourceTest(unittest.TestCase):
         text = "".join(re.findall(r'"((?:[^"\\]|\\.)*)"', body))
         self.assertLess(len(text), 1000, text)
 
+    def test_player_is_built(self):
+        cmake = (ROOT / "components/muse/CMakeLists.txt").read_text()
+        self.assertIn('"muse_gadget_play.c"', cmake)
+
+    def test_voice_task_plays_sounds_when_idle(self):
+        voice = (ROOT / "components/muse/muse_voice.c").read_text()
+        self.assertIn('#include "muse_gadget_play.h"', voice)
+        self.assertRegex(voice, r"rest = rest && !muse_play_pending\(\);")
+        hook = re.search(
+            r"#if CONFIG_MUSE_GADGET_COMMANDS && CONFIG_MUSE_HATCH\s*\n(?:\s*/\*.*\*/\s*\n)*"
+            r"\s*if \(muse_play_pending\(\)\) \{\s*\n\s*muse_wifi_power\(MUSE_WIFI_FULL\);\s*\n"
+            r"\s*pending_down = muse_play_run\(s_queue\);", voice)
+        self.assertIsNotNone(hook, "voice_task() lacks the muse_play_run hook")
+        # Before the idle read, so a queued sound plays before the next press is read.
+        self.assertLess(voice.index("pending_down = muse_play_run(s_queue);"),
+                        voice.index("/* The 20 ms read paces this loop. */"))
+
+    def test_player_logs_no_urls_or_text(self):
+        # Review focus 2: a clip URL can carry a token, and speech is private.
+        source = PLAY.read_text()
+        for call in re.findall(r"ESP_LOG\w\(TAG,\s*\"(?:[^\"\\]|\\.)*\"(.*?)\);", source, re.S):
+            self.assertNotRegex(call, r"\b(url|text|arg)\b", call)
+
+    def test_tts_start_takes_turns(self):
+        tts = (ROOT / "components/muse/muse_tts_elevenlabs.c").read_text()
+        start = tts[tts.index("uint32_t muse_tts_start("):tts.index("size_t muse_tts_read(")]
+        self.assertIn("atomic_exchange(&s_busy, true)", start)
+
     def test_elevenlabs_key_is_never_logged(self):
-        for path in ("components/muse/muse_tts_elevenlabs.c", "components/muse/muse_gadget_cmds.c"):
+        for path in ("components/muse/muse_tts_elevenlabs.c", "components/muse/muse_gadget_cmds.c",
+                     "components/muse/muse_gadget_play.c"):
             source = (ROOT / path).read_text()
             for call in re.findall(r"ESP_LOG\w\(.*?\);", source, re.S):
                 self.assertNotIn("API_KEY", call, f"{path}: {call}")

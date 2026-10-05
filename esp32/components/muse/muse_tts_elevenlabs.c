@@ -117,7 +117,7 @@ static StreamBufferHandle_t s_buf;
 static TaskHandle_t s_task;
 static char *s_text;          /* TEXT_CAP: the text being fetched */
 static char *s_chunk;         /* CHUNK */
-static uint32_t s_next = 1;   /* the session's alone */
+static atomic_uint s_next = 1;   /* the reply session and the gadget's player take turns */
 static atomic_uint s_want;    /* the fetch asked for; any other value stops it */
 static atomic_uint s_ready;   /* the fetch whose MP3 s_buf holds */
 static atomic_uint s_ended;   /* the last fetch to finish */
@@ -334,7 +334,8 @@ static size_t utf8_whole(const char *s, size_t len)
 
 uint32_t muse_tts_start(const char *text, size_t len)
 {
-    if (!s_task || atomic_load(&s_busy)) {
+    /* Claimed before anything is touched: two tasks may ask at once. */
+    if (!s_task || atomic_exchange(&s_busy, true)) {
         return 0;
     }
     if (len > TEXT_CAP - 1) {
@@ -343,11 +344,10 @@ uint32_t muse_tts_start(const char *text, size_t len)
     len = utf8_whole(text, len);
     memcpy(s_text, text, len);
     s_text[len] = '\0';
-    uint32_t job = s_next++;
-    if (!s_next) {
-        s_next = 1;
+    uint32_t job = atomic_fetch_add(&s_next, 1);
+    if (!job) {
+        job = atomic_fetch_add(&s_next, 1);   /* 0 means "none" */
     }
-    atomic_store(&s_busy, true);
     atomic_store(&s_want, job);
     xTaskNotifyGive(s_task);
     return job;

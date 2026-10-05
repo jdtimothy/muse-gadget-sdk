@@ -37,6 +37,9 @@
 #include "muse_settings.h"
 #include "muse_state.h"
 #include "muse_wifi.h"
+#if CONFIG_MUSE_GADGET_COMMANDS && CONFIG_MUSE_HATCH
+#include "muse_gadget_play.h"
+#endif
 
 static const char *TAG = "muse_voice";
 
@@ -797,6 +800,9 @@ static void voice_task(void *arg)
             bool asleep = muse_state_asleep();
             bool battery = muse_state_on_battery();
             bool rest = asleep && battery && !s_chirp && !s_mp3test && !s_loopback;
+#if CONFIG_MUSE_GADGET_COMMANDS && CONFIG_MUSE_HATCH
+            rest = rest && !muse_play_pending();   /* a queued sound wakes the codecs */
+#endif
 #if HOLD_NOTES
             /* A press goes first: send_held() leaves it queued and returns
              * without backing off, so retrying before it's read would spin. */
@@ -843,6 +849,17 @@ static void voice_task(void *arg)
                 muse_audio_loopback_test(muse_settings_volume());
                 pre_reset();
             }
+#if CONFIG_MUSE_GADGET_COMMANDS && CONFIG_MUSE_HATCH
+            /* Sounds Muse asked for (muse_gadget_play.c); a talk press cuts in. */
+            if (muse_play_pending()) {
+                muse_wifi_power(MUSE_WIFI_FULL);
+                pending_down = muse_play_run(s_queue);
+                pre_reset();
+                if (pending_down) {
+                    continue;   /* records it, as a press during a reply */
+                }
+            }
+#endif
             /* The 20 ms read paces this loop. */
             idle_capture();
             if (xQueueReceive(s_queue, &ev, 0) != pdTRUE) {
