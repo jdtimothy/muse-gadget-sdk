@@ -147,6 +147,17 @@ class MuseGadgetCmdsSourceTest(unittest.TestCase):
         for call in re.findall(r"ESP_LOG\w\(TAG,\s*\"(?:[^\"\\]|\\.)*\"(.*?)\);", source, re.S):
             self.assertNotRegex(call, r"\b(url|text|arg)\b", call)
 
+    def test_clips_retry_with_google_roots(self):
+        # Board fix: hosts behind Google's front end send GTS Root R1 cross-signed
+        # by the retired GlobalSign Root CA, which the IDF bundle refuses.
+        source = PLAY.read_text()
+        clip = source[source.index("static esp_http_client_handle_t connect_clip("):source.index("static void player_task(")]
+        self.assertIn("crt_bundle_attach", source)
+        self.assertIn("muse_tts_google_roots()", clip)
+        self.assertIn("ESP_ERR_HTTP_CONNECT", clip)
+        tts = (ROOT / "components/muse/muse_tts_elevenlabs.c").read_text()
+        self.assertIn("const char *muse_tts_google_roots(void)", tts)
+
     def test_tts_start_takes_turns(self):
         tts = (ROOT / "components/muse/muse_tts_elevenlabs.c").read_text()
         start = tts[tts.index("uint32_t muse_tts_start("):tts.index("size_t muse_tts_read(")]

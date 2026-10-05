@@ -49,6 +49,11 @@ size_t muse_tts_read(uint32_t job, uint8_t *dst, size_t cap, bool *ended, bool *
 /* Stops the current fetch. */
 void muse_tts_cancel(void);
 
+/* Google Trust Services' roots as PEM, for any host that sends GTS Root R1
+ * cross-signed by the retired GlobalSign Root CA, which IDF's certificate
+ * bundle then refuses (see GTS_ROOTS_PEM in muse_tts_elevenlabs.c). */
+const char *muse_tts_google_roots(void);
+
 #define MUSE_TTS_VOICE_ID_MAX 32
 #define MUSE_TTS_VOICE_NAME_MAX 64
 

@@ -479,25 +479,46 @@ static bool stream_clip(esp_http_client_handle_t c, const char *host, uint32_t *
     return *frames > 0 || atomic_load(&s_stop);
 }
 
-static bool make_clip(const char *url, uint32_t *frames)
+/* Opens the clip, checking the server against IDF's certificate bundle, or
+ * against Google Trust Services' roots alone if `google` is set. */
+static esp_http_client_handle_t connect_clip(const char *url, bool google, int *status, esp_err_t *err)
 {
-    char host[64];
-    url_host(url, host, sizeof(host));
     esp_http_client_config_t cfg = {
         .url = url,
-        .crt_bundle_attach = esp_crt_bundle_attach,
         .timeout_ms = CLIP_TIMEOUT_MS,
         .buffer_size = 2048,   /* whole header lines must fit */
         .buffer_size_tx = 1024,
         .disable_auto_redirect = true,
     };
+    if (google) {
+        cfg.cert_pem = muse_tts_google_roots();
+    } else {
+        cfg.crt_bundle_attach = esp_crt_bundle_attach;
+    }
     esp_http_client_handle_t c = esp_http_client_init(&cfg);
+    *err = c ? open_clip(c, status) : ESP_ERR_NO_MEM;
+    return c;
+}
+
+static bool make_clip(const char *url, uint32_t *frames)
+{
+    char host[64];
+    url_host(url, host, sizeof(host));
+    int status = 0;
+    esp_err_t err;
+    esp_http_client_handle_t c = connect_clip(url, false, &status, &err);
+    if (err == ESP_ERR_HTTP_CONNECT && !atomic_load(&s_stop)) {
+        /* Hosts behind Google's front end send GTS Root R1 cross-signed by
+         * the retired GlobalSign Root CA, which the bundle refuses: as
+         * ElevenLabs' speech does, check them against Google's roots. */
+        ESP_LOGI(TAG, "clip from %s: trying Google's roots", host);
+        esp_http_client_cleanup(c);
+        c = connect_clip(url, true, &status, &err);
+    }
     if (!c) {
         ESP_LOGW(TAG, "clip from %s: no memory", host);
         return false;
     }
-    int status = 0;
-    esp_err_t err = open_clip(c, &status);
     bool ok = false;
     if (err == ESP_ERR_INVALID_ARG) {
         ESP_LOGW(TAG, "clip from %s: redirected off https", host);

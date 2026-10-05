@@ -317,6 +317,11 @@ bool muse_tts_enabled(void)
     return s_task != NULL;
 }
 
+const char *muse_tts_google_roots(void)
+{
+    return GTS_ROOTS_PEM;
+}
+
 /* Drops a UTF-8 sequence cut short at the end, which ElevenLabs would refuse. */
 static size_t utf8_whole(const char *s, size_t len)
 {
