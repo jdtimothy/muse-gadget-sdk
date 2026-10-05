@@ -133,6 +133,38 @@ def summary(st):
 
 # ---- Muse ----
 
+# The gadget's reaction hooks in the default renderer (components/muse/muse_reactions.inc).
+REACTION_LINE = re.compile(r'^\s*(#include "muse_reaction\w*\.inc"|/\* Reactions \(avatar\.react\).*\*/|'
+                           r'REACT_COLOR_IDS|REACT_COLOR_VALUES|react_\w+\(.*\);|blush = react_blush\(.*\);)\s*$')
+REACTION_IF = re.compile(r'^(\s*)if \(!react_\w+\(.*\)\) \{\s*$')
+
+
+def without_reactions(src):
+    """The default renderer without the reaction hooks: Muse's own avatar can't
+    see the reaction files, so it's drawn from the plain renderer, and shows no reactions."""
+    src = src.replace("update_palette(react_scheme(p, &SCHEMES[mode]), dt);", "update_palette(&SCHEMES[mode], dt);")
+    src = src.replace("if (mode == MUSE_MODE_THINKING && !react_hides_dots(p)) {", "if (mode == MUSE_MODE_THINKING) {")
+    out = []
+    depth = 0       # inside an `if (!react_...) {` block: its brace depth
+    shift = None    # and how far its lines were indented for it
+    for line in src.splitlines(keepends=True):
+        if depth:
+            depth += line.count("{") - line.count("}")
+            if depth == 0:
+                continue   # the block's own closing brace
+            if shift is None:
+                shift = 4 if line.startswith(block_indent + "    ") else 0
+            out.append(line[shift:] if shift and line.startswith(" " * shift) else line)
+            continue
+        m = REACTION_IF.match(line)
+        if m:
+            depth, shift, block_indent = 1, None, m.group(1)
+            continue
+        if not REACTION_LINE.match(line):
+            out.append(line)
+    return "".join(out)
+
+
 def request(edit):
     """The message for Muse: the prompt, then the renderer to start from."""
     with open(PROMPT, encoding="utf-8") as f:
@@ -143,7 +175,7 @@ def request(edit):
         return (f"{prompt}\n\nYou already drew yourself: that's the muse_pixel.c below. Change only this, "
                 f"keep everything else as it is, and send the whole file back:\n{edit}\n\n```c\n{current}```\n")
     with open(make_gifs.DEFAULT_SRC, encoding="utf-8") as f:
-        default = f.read()
+        default = without_reactions(f.read())
     return f"{prompt}\n\nThe current muse_pixel.c (the default avatar):\n\n```c\n{default}```\n"
 
 

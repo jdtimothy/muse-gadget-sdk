@@ -44,6 +44,34 @@ class MuseReactionsHarnessTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
+class AvatarToolStripsReactionsTest(unittest.TestCase):
+    """Review fix: avatar.py hands Muse the default renderer to draw from. Its
+    reaction hooks need files Muse never sees, so they're taken out first."""
+
+    def test_stripped_renderer_has_no_reactions_and_builds_alone(self):
+        import importlib
+        import sys
+        sys.path.insert(0, str(ROOT / "tools/muse"))
+        avatar = importlib.import_module("avatar")
+        plain = avatar.without_reactions(PIXEL.read_text())
+        for word in ("react", "REACT_", "muse_reaction"):
+            self.assertNotIn(word, plain)
+        self.assertIn("update_palette(&SCHEMES[mode], dt);", plain)
+        self.assertIn("draw_mouth(iround(j.fx), iround(eye_y + 3), mouth, mouth_open);", plain)
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "muse_pixel.c"
+            src.write_text(plain)
+            cc = shlex.split(os.environ.get("CC", "cc"))
+            # Only muse_pixel.h on the path, as Muse's file gets: no reaction files to lean on.
+            inc = Path(tmp) / "inc"
+            inc.mkdir()
+            for header in ("muse_pixel.h", "muse_state.h"):
+                (inc / header).write_text((ROOT / "components/muse" / header).read_text())
+            built = subprocess.run([*cc, "-O1", "-Wall", "-Werror", "-I", str(inc), str(ROOT / "tools/muse/preview.c"),
+                                    str(src), "-lm", "-o", str(Path(tmp) / "preview")], capture_output=True, text=True)
+            self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
+
+
 class MuseReactionsSourceTest(unittest.TestCase):
     """The hooks in Meta's renderer: keep them when rebasing."""
 
