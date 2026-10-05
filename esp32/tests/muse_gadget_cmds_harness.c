@@ -15,6 +15,7 @@
  */
 
 /* Host harness for the pure section of components/muse/muse_gadget_cmds.c. */
+#include <ctype.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -143,11 +144,124 @@ static void test_gadget_error(void)
     cJSON_Delete(r);
 }
 
+/* The shape of ElevenLabs' GET /v1/voices, with the traps: nested "name" and
+ * "voice_id"-like keys, escapes, nulls and arrays. */
+static const char VOICES[] =
+    "{\"voices\":["
+    "{\"voice_id\":\"JBFqnCBsd6RMkjVDRZzb\",\"name\":\"George - Warm, Captivating Storyteller\","
+    " \"samples\":null,\"category\":\"premade\",\"fine_tuning\":{\"name\":\"not me\",\"state\":{}},"
+    " \"labels\":{\"accent\":\"british\"},\"sharing\":{\"original_voice_id\":\"zzz\"},"
+    " \"verified_languages\":[{\"language\":\"en\",\"preview_url\":\"https://x/y\"}],"
+    " \"settings\":{\"stability\":0.5,\"use_speaker_boost\":true}},"
+    "{\"name\":\"Sarah \\\"Sunny\\\" \\u00e9\",\"voice_id\":\"EXAVITQu4vr4xnSDxMaL\",\"category\":null},"
+    "{\"voice_id\":\"pqHfZKP75CvOlQylNhV4\",\"name\":\"Sarah - Mature\",\"category\":\"premade\"},"
+    "{\"voice_id\":\"\",\"name\":\"no id\"}"
+    "],\"has_more\":false}";
+
+static void test_scan_voices(void)
+{
+    gadget_voice_t v[8];
+    int n = scan_voices(VOICES, strlen(VOICES), v, 8);
+    CHECK(n == 3);
+    CHECK(!strcmp(v[0].id, "JBFqnCBsd6RMkjVDRZzb"));
+    CHECK(!strcmp(v[0].name, "George - Warm, Captivating Storyteller"));
+    CHECK(!strcmp(v[0].category, "premade"));
+    CHECK(!strcmp(v[1].id, "EXAVITQu4vr4xnSDxMaL"));
+    CHECK(!strcmp(v[1].name, "Sarah \"Sunny\" ?"));
+    CHECK(v[1].category[0] == '\0');
+    CHECK(!strcmp(v[2].name, "Sarah - Mature"));
+
+    /* Review focus 5: more voices than room; the count still says how many. */
+    gadget_voice_t two[2];
+    CHECK(scan_voices(VOICES, strlen(VOICES), two, 2) == 3);
+    CHECK(!strcmp(two[1].id, "EXAVITQu4vr4xnSDxMaL"));
+
+    const char *empty = "{\"voices\":[]}";
+    CHECK(scan_voices(empty, strlen(empty), v, 8) == 0);
+    const char *other = "{\"detail\":{\"status\":\"missing_permissions\"}}";
+    CHECK(scan_voices(other, strlen(other), v, 8) == -1);
+    CHECK(scan_voices(VOICES, 40, v, 8) == -1);   /* cut short */
+    CHECK(scan_voices("", 0, v, 8) == -1);
+    const char *notobj = "[1,2]";
+    CHECK(scan_voices(notobj, strlen(notobj), v, 8) == -1);
+}
+
+static void test_match_voice(void)
+{
+    gadget_voice_t v[8];
+    int n = scan_voices(VOICES, strlen(VOICES), v, 8);
+    /* Review focus 3: loose names. */
+    CHECK(match_voice(v, n, "george") == 0);
+    CHECK(match_voice(v, n, "GEORGE - warm, captivating storyteller") == 0);
+    CHECK(match_voice(v, n, "JBFqnCBsd6RMkjVDRZzb") == 0);
+    CHECK(match_voice(v, n, "Sarah - Mature") == 2);
+    CHECK(match_voice(v, n, "sarah") == -2);
+    CHECK(match_voice(v, n, "Rachel") == -1);
+    CHECK(match_voice(v, n, "") == -1);
+}
+
+static void test_voice_choice_error(void)
+{
+    gadget_voice_t v[8];
+    int n = scan_voices(VOICES, strlen(VOICES), v, 8);
+    char msg[512];
+    voice_choice_error(msg, sizeof(msg), v, n, "sarah", -2);
+    CHECK(strstr(msg, "several") && strstr(msg, "Sarah - Mature") && strstr(msg, "Sunny") && !strstr(msg, "George"));
+    voice_choice_error(msg, sizeof(msg), v, n, "Rachel", -1);
+    CHECK(strstr(msg, "Rachel") && strstr(msg, "George") && strstr(msg, "Sarah - Mature"));
+    char small[40];
+    voice_choice_error(small, sizeof(small), v, n, "Rachel", -1);
+    CHECK(strlen(small) == sizeof(small) - 1 && !strcmp(small + sizeof(small) - 4, "..."));
+}
+
+static void test_voices_result(void)
+{
+    gadget_voice_t v[8];
+    int n = scan_voices(VOICES, strlen(VOICES), v, 8);
+    cJSON *r = voices_result(v, n, 70, "pqHfZKP75CvOlQylNhV4");
+    cJSON *p = cJSON_GetObjectItem(r, "payload");
+    CHECK(cJSON_GetArraySize(cJSON_GetObjectItem(p, "voices")) == 3);
+    cJSON *first = cJSON_GetArrayItem(cJSON_GetObjectItem(p, "voices"), 0);
+    CHECK(!strcmp(cJSON_GetObjectItem(first, "category")->valuestring, "premade"));
+    CHECK(!cJSON_GetObjectItem(first, "voice_id"));   /* names only: the list is for people */
+    CHECK(!cJSON_GetObjectItem(cJSON_GetArrayItem(cJSON_GetObjectItem(p, "voices"), 1), "category"));
+    CHECK(!strcmp(cJSON_GetObjectItem(p, "current")->valuestring, "Sarah - Mature"));
+    CHECK(cJSON_GetObjectItem(p, "not_listed")->valueint == 67);
+    cJSON_Delete(r);
+
+    r = voices_result(v, n, n, "someone-else");
+    p = cJSON_GetObjectItem(r, "payload");
+    CHECK(cJSON_IsNull(cJSON_GetObjectItem(p, "current")));
+    CHECK(!cJSON_GetObjectItem(p, "not_listed"));
+    cJSON_Delete(r);
+
+    r = selected_result(&v[0]);
+    CHECK(!strcmp(cJSON_GetObjectItem(cJSON_GetObjectItem(r, "payload"), "voice")->valuestring, v[0].name));
+    cJSON_Delete(r);
+}
+
+static void test_voice_fetch_error(void)
+{
+    const char *msg = NULL;
+    CHECK(voice_fetch_error(200, &msg) == NULL);
+    CHECK(!strcmp(voice_fetch_error(0, &msg), "unavailable") && strstr(msg, "key"));
+    /* Review focus 4: a key without the Voices permission. */
+    CHECK(!strcmp(voice_fetch_error(401, &msg), "unavailable") && strstr(msg, "permission"));
+    CHECK(!strcmp(voice_fetch_error(403, &msg), "unavailable"));
+    CHECK(!strcmp(voice_fetch_error(-1, &msg), "network"));
+    CHECK(!strcmp(voice_fetch_error(500, &msg), "network"));
+}
+
 int main(void)
 {
     test_parse_settings();
     test_settings_result();
     test_gadget_error();
+    test_scan_voices();
+    test_match_voice();
+    test_voice_choice_error();
+    test_voices_result();
+    test_voice_fetch_error();
     if (failures) {
         fprintf(stderr, "%d check(s) failed\n", failures);
         return 1;

@@ -32,6 +32,7 @@
 #if CONFIG_MUSE_GADGET_COMMANDS || !defined(ESP_PLATFORM)
 #include "muse_gadget_cmds.h"
 
+#include <ctype.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
@@ -152,6 +153,313 @@ static cJSON *settings_result(const gadget_settings_t *s, int battery_pct, bool 
         cJSON_AddNullToObject(p, "voice");
     }
     return result;
+}
+
+#define GADGET_VOICE_ID_MAX 32     /* ElevenLabs' are 20 */
+#define GADGET_VOICE_NAME_MAX 64
+#define GADGET_VOICES_MAX 64
+
+typedef struct {
+    char id[GADGET_VOICE_ID_MAX + 1];
+    char name[GADGET_VOICE_NAME_MAX + 1];
+    char category[16];   /* "premade", "cloned", ...; empty if none */
+} gadget_voice_t;
+
+/*
+ * A forward-only JSON reader for ElevenLabs' voice list. The list can run to
+ * hundreds of KB, and cJSON would build it as thousands of small nodes in
+ * internal RAM; this keeps only the three strings it needs.
+ */
+typedef struct {
+    const char *p, *end;
+} scan_t;
+
+static void scan_ws(scan_t *s)
+{
+    while (s->p < s->end && (*s->p == ' ' || *s->p == '\n' || *s->p == '\r' || *s->p == '\t')) {
+        s->p++;
+    }
+}
+
+static bool scan_char(scan_t *s, char c)
+{
+    scan_ws(s);
+    if (s->p < s->end && *s->p == c) {
+        s->p++;
+        return true;
+    }
+    return false;
+}
+
+/* A string, into out (cap bytes, or NULL to skip it). \uXXXX becomes '?'. */
+static bool scan_str(scan_t *s, char *out, size_t cap)
+{
+    scan_ws(s);
+    if (s->p >= s->end || *s->p != '"') {
+        return false;
+    }
+    s->p++;
+    size_t n = 0;
+    while (s->p < s->end && *s->p != '"') {
+        char c = *s->p++;
+        if (c == '\\') {
+            if (s->p >= s->end) {
+                return false;
+            }
+            c = *s->p++;
+            switch (c) {
+            case 'n': c = '\n'; break;
+            case 't': c = '\t'; break;
+            case 'r': c = '\r'; break;
+            case 'b': c = '\b'; break;
+            case 'f': c = '\f'; break;
+            case 'u':
+                if (s->end - s->p < 4) {
+                    return false;
+                }
+                s->p += 4;
+                c = '?';
+                break;
+            default: break;   /* \" \\ \/ */
+            }
+        }
+        if (out && n + 1 < cap) {
+            out[n++] = c;
+        }
+    }
+    if (s->p >= s->end) {
+        return false;
+    }
+    s->p++;
+    if (out && cap) {
+        out[n] = '\0';
+    }
+    return true;
+}
+
+/* Any value, unread. */
+static bool scan_skip(scan_t *s, int depth)
+{
+    scan_ws(s);
+    if (depth > 32 || s->p >= s->end) {
+        return false;
+    }
+    char c = *s->p;
+    if (c == '"') {
+        return scan_str(s, NULL, 0);
+    }
+    if (c == '{' || c == '[') {
+        char close = c == '{' ? '}' : ']';
+        s->p++;
+        if (scan_char(s, close)) {
+            return true;
+        }
+        do {
+            if (c == '{' && !(scan_str(s, NULL, 0) && scan_char(s, ':'))) {
+                return false;
+            }
+            if (!scan_skip(s, depth + 1)) {
+                return false;
+            }
+        } while (scan_char(s, ','));
+        return scan_char(s, close);
+    }
+    const char *start = s->p;
+    while (s->p < s->end && (isalnum((unsigned char)*s->p) || *s->p == '-' || *s->p == '+' || *s->p == '.')) {
+        s->p++;
+    }
+    return s->p > start;
+}
+
+/* One voice object: its own voice_id, name and category, not nested ones. */
+static bool scan_voice(scan_t *s, gadget_voice_t *v)
+{
+    memset(v, 0, sizeof(*v));
+    if (!scan_char(s, '{')) {
+        return false;
+    }
+    if (scan_char(s, '}')) {
+        return true;
+    }
+    do {
+        char key[16];
+        if (!scan_str(s, key, sizeof(key)) || !scan_char(s, ':')) {
+            return false;
+        }
+        char *dst = NULL;
+        size_t cap = 0;
+        if (!strcmp(key, "voice_id")) {
+            dst = v->id, cap = sizeof(v->id);
+        } else if (!strcmp(key, "name")) {
+            dst = v->name, cap = sizeof(v->name);
+        } else if (!strcmp(key, "category")) {
+            dst = v->category, cap = sizeof(v->category);
+        }
+        scan_ws(s);
+        bool ok = dst && s->p < s->end && *s->p == '"' ? scan_str(s, dst, cap) : scan_skip(s, 2);
+        if (!ok) {
+            return false;
+        }
+    } while (scan_char(s, ','));
+    return scan_char(s, '}');
+}
+
+/*
+ * The voices in ElevenLabs' GET /v1/voices body ({"voices":[{...}], ...}):
+ * how many have an id and a name, storing the first `max` of them in out.
+ * -1 if the body isn't that shape or is cut short.
+ */
+static int scan_voices(const char *json, size_t len, gadget_voice_t *out, int max)
+{
+    scan_t s = { json, json + len };
+    if (!scan_char(&s, '{') || scan_char(&s, '}')) {
+        return -1;
+    }
+    do {
+        char key[16];
+        if (!scan_str(&s, key, sizeof(key)) || !scan_char(&s, ':')) {
+            return -1;
+        }
+        if (strcmp(key, "voices")) {
+            if (!scan_skip(&s, 1)) {
+                return -1;
+            }
+            continue;
+        }
+        if (!scan_char(&s, '[')) {
+            return -1;
+        }
+        int n = 0;
+        if (scan_char(&s, ']')) {
+            return 0;
+        }
+        do {
+            gadget_voice_t v;
+            if (!scan_voice(&s, &v)) {
+                return -1;
+            }
+            if (v.id[0] && v.name[0]) {
+                if (n < max) {
+                    out[n] = v;
+                }
+                n++;
+            }
+        } while (scan_char(&s, ','));
+        return scan_char(&s, ']') ? n : -1;
+    } while (scan_char(&s, ','));
+    return -1;
+}
+
+/*
+ * The voice `name` means, ignoring case: one called exactly that or with that
+ * ID, else the only one whose name starts with it (ElevenLabs' run on, as in
+ * "George - Warm, Captivating Storyteller"). -1 none, -2 several.
+ */
+static int match_voice(const gadget_voice_t *v, int n, const char *name)
+{
+    size_t len = strlen(name);
+    if (!len) {
+        return -1;
+    }
+    for (int i = 0; i < n; i++) {
+        if (!strcasecmp(v[i].name, name) || !strcmp(v[i].id, name)) {
+            return i;
+        }
+    }
+    int found = -1;
+    for (int i = 0; i < n; i++) {
+        if (!strncasecmp(v[i].name, name, len)) {
+            if (found >= 0) {
+                return -2;
+            }
+            found = i;
+        }
+    }
+    return found;
+}
+
+/* The message for a name that matched no voice (match -1) or several (-2), naming the candidates. */
+static void voice_choice_error(char *out, size_t cap, const gadget_voice_t *v, int n,
+                               const char *name, int match)
+{
+    int w = match == -2 ? snprintf(out, cap, "\"%.48s\" matches several voices: ", name)
+                        : snprintf(out, cap, "no voice called \"%.48s\". Voices: ", name);
+    if (w < 0 || (size_t)w >= cap) {
+        return;
+    }
+    size_t used = (size_t)w;
+    bool first = true;
+    for (int i = 0; i < n; i++) {
+        if (match == -2 && strncasecmp(v[i].name, name, strlen(name))) {
+            continue;
+        }
+        w = snprintf(out + used, cap - used, "%s%s", first ? "" : ", ", v[i].name);
+        if (w < 0 || (size_t)w >= cap - used) {
+            if (cap >= 4) {
+                strcpy(out + cap - 4, "...");
+            }
+            return;
+        }
+        used += (size_t)w;
+        first = false;
+    }
+}
+
+/* voice.select's list: names and categories, the current voice, and how many didn't fit. */
+static cJSON *voices_result(const gadget_voice_t *v, int stored, int total, const char *current_id)
+{
+    cJSON *p;
+    cJSON *result = gadget_ok(&p);
+    cJSON *list = cJSON_AddArrayToObject(p, "voices");
+    const char *current = NULL;
+    for (int i = 0; i < stored; i++) {
+        cJSON *item = cJSON_CreateObject();
+        cJSON_AddStringToObject(item, "name", v[i].name);
+        if (v[i].category[0]) {
+            cJSON_AddStringToObject(item, "category", v[i].category);
+        }
+        cJSON_AddItemToArray(list, item);
+        if (current_id && !strcmp(v[i].id, current_id)) {
+            current = v[i].name;
+        }
+    }
+    if (current) {
+        cJSON_AddStringToObject(p, "current", current);
+    } else {
+        cJSON_AddNullToObject(p, "current");
+    }
+    if (total > stored) {
+        cJSON_AddNumberToObject(p, "not_listed", total - stored);
+    }
+    return result;
+}
+
+static cJSON *selected_result(const gadget_voice_t *v)
+{
+    cJSON *p;
+    cJSON *result = gadget_ok(&p);
+    cJSON_AddStringToObject(p, "voice", v->name);
+    return result;
+}
+
+/* Why GET /v1/voices gave no list: an error code and *message, or NULL for 200.
+ * status: the HTTP status; -1 unreachable or cut short; 0 no key. */
+static const char *voice_fetch_error(int status, const char **message)
+{
+    if (status == 200) {
+        return NULL;
+    }
+    if (status == 0) {
+        *message = "spoken replies are off: no ElevenLabs key is set on the gadget";
+        return "unavailable";
+    }
+    if (status == 401 || status == 403) {
+        *message = "the ElevenLabs key can't list voices: give it the Voices read permission at elevenlabs.io";
+        return "unavailable";
+    }
+    *message = status < 0 ? "couldn't reach ElevenLabs for the voice list"
+                          : "ElevenLabs refused the voice list request";
+    return "network";
 }
 
 /* ---- Device ---- */
