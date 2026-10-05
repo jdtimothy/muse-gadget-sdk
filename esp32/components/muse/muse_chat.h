@@ -133,6 +133,11 @@ size_t muse_hatch_turn_audio_wait(const int16_t *pcm, size_t frames, int wait_ms
 void muse_hatch_text_turn(char *text);
 void muse_hatch_text_cancel(void);
 
+/* A tapped reply option (muse_gadget_options.c): posts `message` as a turn
+ * whose reply comes back like a voice turn's (muse_hatch_turn_event/read), with
+ * `caption` as its heard text. False if the session can't take it now. */
+bool muse_hatch_tap_turn(const char *message, const char *caption);
+
 /*
  * Prints one "@chat" line per call (more if `text` is long): the type, then the
  * printf-style `fields` (JSON members, or NULL), then `text` escaped (or none).

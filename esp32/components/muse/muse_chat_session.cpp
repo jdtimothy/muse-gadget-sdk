@@ -131,12 +131,12 @@ static const char *TAG = "muse_chat_session";
 
 /* ---- Voice task <-> session task ---- */
 
-enum cmd_type_t : uint8_t { CMD_CONNECT, CMD_FORGET, CMD_BEGIN, CMD_END, CMD_CANCEL, CMD_TEXT, CMD_TEXT_CANCEL, CMD_WAKE };
+enum cmd_type_t : uint8_t { CMD_CONNECT, CMD_FORGET, CMD_BEGIN, CMD_END, CMD_CANCEL, CMD_TEXT, CMD_TEXT_CANCEL, CMD_TAP, CMD_WAKE };
 
 struct cmd_t {
     cmd_type_t type;
     uint32_t gen;
-    char *text;              /* CMD_TEXT: malloc'd, freed by the session task */
+    char *text;              /* CMD_TEXT, CMD_TAP: malloc'd, freed by the session task */
 };
 
 struct ev_t {
@@ -216,6 +216,7 @@ struct turn_t {
     phase_t phase;
     uint32_t gen;
     bool text;               /* typed at the console: the reply goes there, unspoken */
+    bool tap;                /* a tapped reply option: text in, the reply spoken */
     bool end_requested, end_sent, chat_posted, acked;
     int64_t dict_id, chat_id;
     int64_t start_us, end_sent_us, chat_us, last_event_us, last_content_us;
@@ -1238,6 +1239,19 @@ static void text_begin(const char *text)
     }
 }
 
+/* A tapped reply option (muse_gadget_options.c): text in, like a typed turn,
+ * but started like a voice turn so the voice task speaks the reply. */
+static void tap_begin(uint32_t gen, const char *message, const char *caption)
+{
+    if (!turn_start(gen, false)) {
+        return;
+    }
+    s_turn.tap = true;
+    ESP_LOGI(TAG, "tapped: \"%s\"", caption);
+    emit(MUSE_HATCH_EV_HEARD, caption);   /* the caption until the reply: what was tapped */
+    send_chat(message, "text");
+}
+
 static void on_dictation_line(cJSON *line)
 {
     const char *type = cJSON_GetStringValue(cJSON_GetObjectItem(line, "type"));
@@ -1503,7 +1517,9 @@ static void on_chat_ack(stream_t *s)
     mark(M_ACK);
     ESP_LOGI(TAG, "chat/stream ack: user message %s", s_turn.user_ids[0]);
     cJSON_Delete(root);
-    emit(MUSE_HATCH_EV_SENT, nullptr);
+    if (!s_turn.tap) {   /* a tap's caption stays what was tapped */
+        emit(MUSE_HATCH_EV_SENT, nullptr);
+    }
 }
 
 /* ---- Turn: speech ---- */
@@ -1982,6 +1998,12 @@ static void handle(const cmd_t &cmd)
             turn_fail("CANCELLED");
         }
         break;
+    case CMD_TAP:   /* text: the message, then the caption, each NUL-ended */
+        if (cmd.gen == s_gen.load()) {
+            tap_begin(cmd.gen, cmd.text, cmd.text + strlen(cmd.text) + 1);
+        }
+        free(cmd.text);
+        break;
     case CMD_WAKE:   /* only ends hatch_task's resting wait */
         break;
     }
@@ -2193,6 +2215,27 @@ extern "C" void muse_hatch_text_turn(char *text)
 extern "C" void muse_hatch_text_cancel(void)
 {
     post(CMD_TEXT_CANCEL, 0);
+}
+
+extern "C" bool muse_hatch_tap_turn(const char *message, const char *caption)
+{
+    size_t a = strlen(message), b = strlen(caption);
+    char *text = static_cast<char *>(malloc(a + b + 2));
+    if (!s_cmds || !text) {
+        free(text);
+        return false;
+    }
+    memcpy(text, message, a + 1);
+    memcpy(text + a + 1, caption, b + 1);
+    uint32_t gen = ++s_gen;   /* as muse_hatch_turn_begin: this turn's events and audio */
+    xStreamBufferReset(s_in);
+    drain_out();
+    cmd_t cmd{ CMD_TAP, gen, text };
+    if (xQueueSend(s_cmds, &cmd, pdMS_TO_TICKS(100)) != pdTRUE) {
+        free(text);
+        return false;
+    }
+    return true;
 }
 
 extern "C" muse_hatch_ev_t muse_hatch_turn_event(char *text, size_t cap)

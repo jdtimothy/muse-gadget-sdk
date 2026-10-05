@@ -170,6 +170,28 @@ class MuseGadgetCmdsSourceTest(unittest.TestCase):
             for call in re.findall(r"ESP_LOG\w\(.*?\);", source, re.S):
                 self.assertNotIn("API_KEY", call, f"{path}: {call}")
 
+    def test_tap_turn_in_the_chat_session(self):
+        chat_h = (ROOT / "components/muse/muse_chat.h").read_text()
+        self.assertIn("bool muse_hatch_tap_turn(const char *message, const char *caption);", chat_h)
+        session = (ROOT / "components/muse/muse_chat_session.cpp").read_text()
+        self.assertIn("CMD_TAP", session)
+        tap = session[session.index("static void tap_begin("):]
+        tap = tap[:tap.index("\n}\n")]
+        self.assertIn("turn_start(gen, false)", tap)        # spoken, like a voice turn
+        self.assertIn("emit(MUSE_HATCH_EV_HEARD, caption)", tap)
+        self.assertIn('send_chat(message, "text")', tap)
+        self.assertIn("if (!s_turn.tap) {", session)          # no "note sent" caption for a tap
+
+    def test_voice_task_takes_taps(self):
+        voice = (ROOT / "components/muse/muse_voice.c").read_text()
+        self.assertIn('#include "muse_gadget_options.h"', voice)
+        self.assertRegex(voice, r"static bool tap_turn\(const char \*message, const char \*caption\)")
+        hook = re.search(r"if \(muse_options_take_tap\(message, sizeof\(message\), label, sizeof\(label\)\)\) \{\s*\n"
+                         r"\s*muse_wifi_power\(MUSE_WIFI_FULL\);\s*\n\s*pending_down = tap_turn\(message, label\);", voice)
+        self.assertIsNotNone(hook, "voice_task() lacks the tap hook")
+        self.assertLess(voice.index("pending_down = tap_turn(message, label);"),
+                        voice.index("/* The 20 ms read paces this loop. */"))
+
     def test_react_is_advertised_and_dispatched_without_spoken_replies(self):
         source = SOURCE.read_text()
         add = source[source.index("void muse_gadget_add_commands("):]
