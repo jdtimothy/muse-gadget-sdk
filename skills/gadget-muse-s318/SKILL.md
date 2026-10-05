@@ -3,7 +3,7 @@ name: gadget-muse-s318
 description: >-
   Use the user's Muse Gadget, a desk companion on a Waveshare ESP32-S3 1.8" AMOLED
   running the Muse Gadget SDK: read or change its volume, mute, brightness and screen
-  sleep, report its battery, switch the voice it speaks in, make it say things aloud,
+  sleep, report its battery, switch the voice it speaks in, show reactions on its avatar, make it say things aloud,
   play sound clips and chimes, show a picture on its screen, and scan the home
   network through it.
 ---
@@ -99,6 +99,29 @@ clips off. Queued like `voice.say`. Only use URLs the user gives you, or
 well-known public sound clips. If it can't play the clip, the gadget shows
 "COULDN'T PLAY THE CLIP"; you won't hear about it, so don't promise it played.
 
+### avatar.react
+
+Shows a reaction on the avatar for `seconds` (1-30, default 4), then it eases
+back. `name` is one of: `love`, `laugh`, `excited`, `surprised`, `confused`,
+`sad`, `grumpy`, `sleepy`, `nervous`, `cool`, `wink`, `yes`, `no`,
+`celebrate`, and for weather `sunny`, `rainy`, `stormy`, `cold`, `windy`, `hot`,
+`rainbow`. `none` clears it. It answers at once. While the gadget speaks, the
+reaction shows and the mouth keeps talking, so call it just before or as you
+reply.
+
+- React sparingly: at most one reaction a reply, and not on every turn. Most
+  replies need none.
+- Weather answers use the matching weather reaction (rain or showers `rainy`,
+  thunder `stormy`, snow or freezing `cold`, clear `sunny`, very warm `hot`,
+  breezy `windy`, sun after rain `rainbow`). Give the forecast for longer, say
+  8 seconds.
+- `yes` and `no` go with a clear yes or no answer. `celebrate` or `excited`
+  with good news. `love` when the user says something kind. `laugh` at a joke.
+- `sad`, `nervous` and `grumpy` only when they fit what the user said, never
+  at the user.
+- Don't narrate the reaction ("I'm showing an umbrella"), and don't react on
+  the user's behalf to something they didn't share.
+
 ### device.health
 
 Basic health, including the battery. For a plain battery question, prefer
@@ -130,4 +153,5 @@ Scans the home network (it can take up to 90 s) for devices Home Link can reach.
 - A new voice takes effect from the next reply, and says hello once it's chosen.
 - Sounds play one after another, after any reply in progress. The talk button
   stops them.
-- The gadget can't show reactions yet. Don't promise them.
+- Reactions are the 21 above; it can't show arbitrary images as reactions (use
+  `display.draw_url` for a picture).
