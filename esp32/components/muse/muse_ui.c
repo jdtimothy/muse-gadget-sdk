@@ -47,6 +47,9 @@
 #if CONFIG_MUSE_GADGET_COMMANDS
 #include "muse_gadget_react.h"
 #endif
+#if CONFIG_MUSE_GADGET_COMMANDS && CONFIG_MUSE_HATCH
+#include "muse_gadget_options.h"
+#endif
 #if CONFIG_MUSE_WATCHER_CAMERA
 #include "boards/watcher_camera.h"
 #endif
@@ -443,6 +446,11 @@ static void build_button_icons(lv_obj_t *face)
 static void on_canvas_clicked(lv_event_t *e)
 {
     (void)e;
+#if CONFIG_MUSE_GADGET_COMMANDS && CONFIG_MUSE_HATCH
+    if (muse_options_showing()) {
+        return;   /* a near miss on a reply option isn't petting */
+    }
+#endif
     muse_state_make_happy();
 }
 
@@ -1414,6 +1422,13 @@ static void update_status(muse_mode_t mode, float now)
         if (mode == MUSE_MODE_THINKING || mode == MUSE_MODE_SPEAKING) {
             answer = layout;
         }
+#if CONFIG_MUSE_GADGET_COMMANDS && CONFIG_MUSE_HATCH
+        /* Reply options (muse_gadget_options.c) take the read layout's page. */
+        const answer_layout_t *opt = &s_answers[ANSWER_READ];
+        if (muse_options_frame(lv_obj_get_parent(s_reply_lbl), opt->top, opt->h, s_w - 32)) {
+            answer = ANSWER_READ;
+        }
+#endif
     }
     if (answer != s_answer) {
         set_answer(answer);

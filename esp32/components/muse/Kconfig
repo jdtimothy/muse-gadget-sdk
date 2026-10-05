@@ -210,7 +210,7 @@ menu "Muse"
             With spoken replies, it also advertises voice.select,
             which switches the ElevenLabs voice, and voice.say, audio.play_url
             and audio.chime, which play speech, MP3 clips and chimes when the
-            gadget is idle. skills/gadget-muse-s318/SKILL.md tells Muse how to
-            use them.
+            gadget is idle, and display.options, which shows reply buttons.
+            skills/gadget-muse-s318/SKILL.md tells Muse how to use them.
 
 endmenu

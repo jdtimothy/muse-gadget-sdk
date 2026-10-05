@@ -170,6 +170,23 @@ class MuseGadgetCmdsSourceTest(unittest.TestCase):
             for call in re.findall(r"ESP_LOG\w\(.*?\);", source, re.S):
                 self.assertNotIn("API_KEY", call, f"{path}: {call}")
 
+    def test_options_are_advertised_dispatched_and_built(self):
+        source = SOURCE.read_text()
+        add = source[source.index("void muse_gadget_add_commands("):]
+        block = add[add.index("#if CONFIG_MUSE_HATCH"):]
+        self.assertIn('"display.options"', block[:block.index("#endif")])
+        body = source[source.index("cJSON *muse_gadget_command("):]
+        self.assertIn("options_command(params)", body[:body.index("\n}\n")])
+        cmake = (ROOT / "components/muse/CMakeLists.txt").read_text()
+        self.assertIn('"muse_gadget_options.c"', cmake)
+
+    def test_ui_shows_options(self):
+        ui = (ROOT / "components/muse/muse_ui.c").read_text()
+        self.assertIn('#include "muse_gadget_options.h"', ui)
+        self.assertRegex(ui, r"if \(muse_options_frame\(lv_obj_get_parent\(s_reply_lbl\), opt->top, opt->h, s_w - 32\)\) \{\s*\n\s*answer = ANSWER_READ;")
+        click = ui[ui.index("static void on_canvas_clicked("):]
+        self.assertIn("muse_options_showing()", click[:click.index("\n}\n")])
+
     def test_tap_turn_in_the_chat_session(self):
         chat_h = (ROOT / "components/muse/muse_chat.h").read_text()
         self.assertIn("bool muse_hatch_tap_turn(const char *message, const char *caption);", chat_h)

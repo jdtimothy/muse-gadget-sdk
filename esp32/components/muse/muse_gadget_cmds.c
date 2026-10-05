@@ -25,6 +25,7 @@
  *   audio.play_url   play an MP3 clip
  *   audio.chime      play a built-in chime
  *                    (all three queued for muse_gadget_play.c)
+ *   display.options  reply buttons after the spoken reply (muse_gadget_options.c)
  * skills/gadget-muse-s318/SKILL.md tells Muse when to use each.
  *
  * Everything from "Pure (host-tested)" to "Device" builds on the host
@@ -813,6 +814,7 @@ static cJSON *options_result(int n)
 #include "freertos/idf_additions.h"
 #include "freertos/task.h"
 #if CONFIG_MUSE_HATCH
+#include "muse_gadget_options.h"
 #include "muse_gadget_play.h"
 #include "muse_tts_elevenlabs.h"
 #endif
@@ -1012,6 +1014,19 @@ static cJSON *sound_command(const char *command, const cJSON *params)
     }
     return sound_result(muse_play_enqueue(s.kind, s.arg, s.caption));
 }
+
+/* display.options: shown once the gadget is idle, so nothing waits. */
+static cJSON *options_command(const cJSON *params)
+{
+    char labels[MUSE_OPTIONS_MAX][MUSE_OPTIONS_LABEL_MAX + 1];
+    int n;
+    char err[160];
+    if (!parse_options(params, labels, &n, err, sizeof(err))) {
+        return gadget_error("invalid_params", err);
+    }
+    muse_options_set(labels, n);
+    return options_result(n);
+}
 #endif
 
 static cJSON *param(const char *type, const char *description)
@@ -1071,6 +1086,14 @@ void muse_gadget_add_commands(cJSON *commands)
                 one_param("url", "string", "https:// link to an MP3."), NULL);
     add_command(commands, "audio.chime", "Play a built-in chime. Queued.",
                 one_param("name", "string", MUSE_CHIME_NAMES "."), NULL);
+    cJSON *opts = param("array", "2-4 short replies, up to 24 characters each.");
+    cJSON *item = cJSON_CreateObject();
+    cJSON_AddStringToObject(item, "type", "string");
+    cJSON_AddItemToObject(opts, "items", item);
+    cJSON *oreq = cJSON_CreateObject();
+    cJSON_AddItemToObject(oreq, "options", opts);
+    add_command(commands, "display.options", "Show reply buttons after the spoken reply; a tap sends that reply.",
+                oreq, NULL);
 #endif
 }
 
@@ -1089,6 +1112,9 @@ cJSON *muse_gadget_command(const char *command, cJSON *params, const char *reque
     }
     if (!strcmp(command, "voice.say") || !strcmp(command, "audio.play_url") || !strcmp(command, "audio.chime")) {
         return sound_command(command, params);
+    }
+    if (!strcmp(command, "display.options")) {
+        return options_command(params);
     }
 #else
     (void)request_id;
