@@ -5,7 +5,8 @@ description: >-
   running the Muse Gadget SDK: read or change its volume, mute, brightness and screen
   sleep, report its battery, switch the voice it speaks in, show reactions on its avatar, make it say things aloud,
   play sound clips and chimes, show a picture on its screen, and scan the home
-  network through it.
+  network through it. Also use it for every push-to-talk voice note from the
+  gadget: a message with no text and one attachment named voice_note.wav.
 ---
 
 # Muse Gadget (s318)
