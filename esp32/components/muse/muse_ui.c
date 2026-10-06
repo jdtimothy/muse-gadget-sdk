@@ -99,7 +99,27 @@ static lv_indev_t *s_indev;
 static lv_obj_t *s_tv;
 static lv_obj_t *s_face;
 static lv_obj_t *s_settings;
-static lv_obj_t *s_dots[2];
+static lv_obj_t *s_dots[3];
+static lv_obj_t *s_np;         /* now-playing tile, at (-1, 0) */
+static lv_obj_t *s_np_player;  /* label: which player */
+static lv_obj_t *s_np_title;   /* label: track title */
+static lv_obj_t *s_np_artist;  /* label: artist — album */
+static lv_obj_t *s_np_state;   /* label: Playing / Paused */
+
+/* What's playing, written by any task via muse_ui_now_playing() and applied
+ * to the tile by the LVGL task. Fixed buffers: the command side truncates. */
+#define NP_PLAYER_MAX 48
+#define NP_FIELD_MAX 128
+#define NP_STATE_MAX 16
+typedef struct {
+    char player[NP_PLAYER_MAX];
+    char title[NP_FIELD_MAX];
+    char artist[NP_FIELD_MAX];
+    char state[NP_STATE_MAX];
+    bool dirty;
+} np_data_t;
+static np_data_t s_np_data;
+static portMUX_TYPE s_np_lock = portMUX_INITIALIZER_UNLOCKED;
 static lv_obj_t *s_wifi_icon;
 static lv_obj_t *s_ble_icon;
 static lv_obj_t *s_cover;
@@ -489,6 +509,115 @@ static lv_obj_t *make_label(lv_obj_t *parent, const lv_font_t *font, uint32_t co
     return l;
 }
 
+/* The Now Playing tile: player name up top, a note, then title / artist. */
+static void build_np(lv_obj_t *tile)
+{
+    s_np_player = make_label(tile, &lv_font_montserrat_14, COLOR_DIM);
+    lv_obj_align(s_np_player, LV_ALIGN_TOP_MID, 0, 56);
+    lv_label_set_text(s_np_player, "");
+
+    lv_obj_t *icon = make_label(tile, &lv_font_montserrat_28, COLOR_ACCENT);
+    lv_label_set_text(icon, LV_SYMBOL_AUDIO);
+    lv_obj_align(icon, LV_ALIGN_TOP_MID, 0, 104);
+
+    s_np_title = make_label(tile, &lv_font_montserrat_28, COLOR_LIT);
+    lv_label_set_long_mode(s_np_title, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(s_np_title, s_w - 64);
+    lv_obj_align(s_np_title, LV_ALIGN_TOP_MID, 0, 168);
+    lv_label_set_text(s_np_title, "Nothing playing");
+
+    s_np_artist = make_label(tile, &lv_font_montserrat_20, COLOR_DIM);
+    lv_label_set_long_mode(s_np_artist, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(s_np_artist, s_w - 64);
+    lv_obj_align(s_np_artist, LV_ALIGN_TOP_MID, 0, 256);
+    lv_label_set_text(s_np_artist, "");
+
+    s_np_state = make_label(tile, &lv_font_montserrat_14, COLOR_DIM);
+    lv_obj_align(s_np_state, LV_ALIGN_BOTTOM_MID, 0, -56);
+    lv_label_set_text(s_np_state, "");
+}
+
+/* Copy a string into a fixed buffer without splitting a trailing UTF-8
+ * sequence. */
+static void np_copy(char *dst, size_t cap, const char *src)
+{
+    if (!src) {
+        return;
+    }
+    size_t n = strlen(src);
+    if (n >= cap) {
+        n = cap - 1;
+        while (n > 0 && ((unsigned char)src[n] & 0xC0) == 0x80) {
+            n--;
+        }
+    }
+    memcpy(dst, src, n);
+    dst[n] = '\0';
+}
+
+void muse_ui_now_playing(const char *player, const char *title,
+                         const char *artist, const char *album,
+                         const char *state)
+{
+    taskENTER_CRITICAL(&s_np_lock);
+    if (player) {
+        np_copy(s_np_data.player, sizeof(s_np_data.player), player);
+    }
+    if (title) {
+        np_copy(s_np_data.title, sizeof(s_np_data.title), title);
+    }
+    if (artist || album) {
+        char line[NP_FIELD_MAX];
+        if (artist && album && *artist && *album) {
+            snprintf(line, sizeof(line), "%s — %s", artist, album);
+        } else if (artist && *artist) {
+            snprintf(line, sizeof(line), "%s", artist);
+        } else if (album && *album) {
+            snprintf(line, sizeof(line), "%s", album);
+        } else {
+            line[0] = '\0';
+        }
+        np_copy(s_np_data.artist, sizeof(s_np_data.artist), line);
+    }
+    if (state) {
+        np_copy(s_np_data.state, sizeof(s_np_data.state), state);
+    }
+    s_np_data.dirty = true;
+    taskEXIT_CRITICAL(&s_np_lock);
+}
+
+/* On the LVGL task: push pending now-playing data into the tile labels. */
+static void np_apply_pending(void)
+{
+    char player[NP_PLAYER_MAX], title[NP_FIELD_MAX], artist[NP_FIELD_MAX];
+    char state[NP_STATE_MAX];
+    bool dirty;
+    taskENTER_CRITICAL(&s_np_lock);
+    dirty = s_np_data.dirty;
+    if (dirty && s_np) {
+        memcpy(player, s_np_data.player, sizeof(player));
+        memcpy(title, s_np_data.title, sizeof(title));
+        memcpy(artist, s_np_data.artist, sizeof(artist));
+        memcpy(state, s_np_data.state, sizeof(state));
+        s_np_data.dirty = false;
+    }
+    taskEXIT_CRITICAL(&s_np_lock);
+    if (!dirty || !s_np) {
+        return;
+    }
+    if (*player) {
+        lv_label_set_text(s_np_player, player);
+    }
+    lv_label_set_text(s_np_title, *title ? title : "Nothing playing");
+    lv_label_set_text(s_np_artist, artist);
+    bool playing = !strcmp(state, "playing");
+    bool paused = !strcmp(state, "paused");
+    lv_label_set_text(s_np_state,
+                      playing ? LV_SYMBOL_PLAY " Playing" : paused ? LV_SYMBOL_PAUSE " Paused" : "");
+    lv_obj_set_style_text_color(s_np_state,
+                                lv_color_hex(playing ? COLOR_ACCENT : COLOR_DIM), 0);
+}
+
 static void show_speaker(bool on)
 {
     /* Off is the one that stands out, like a lit flashlight button. */
@@ -814,7 +943,7 @@ static void build_screen(void)
         lv_obj_set_style_bg_color(s_tv, lv_color_black(), 0);
         lv_obj_set_style_bg_opa(s_tv, LV_OPA_COVER, 0);
         lv_obj_set_scrollbar_mode(s_tv, LV_SCROLLBAR_MODE_OFF);
-        s_face = lv_tileview_add_tile(s_tv, 0, 0, LV_DIR_RIGHT);
+        s_face = lv_tileview_add_tile(s_tv, 0, 0, LV_DIR_LEFT | LV_DIR_RIGHT);
         /* It never scrolls, but LVGL would size its scrollbars from all its
          * children every time it draws any part of it. */
         lv_obj_set_scrollbar_mode(s_face, LV_SCROLLBAR_MODE_OFF);
@@ -823,6 +952,10 @@ static void build_screen(void)
         lv_obj_set_style_bg_color(s_face, lv_color_black(), 0);
         lv_obj_set_style_bg_opa(s_face, LV_OPA_COVER, 0);
         s_settings = lv_tileview_add_tile(s_tv, 1, 0, LV_DIR_LEFT);
+        /* Now Playing: swipe right from the face. */
+        s_np = lv_tileview_add_tile(s_tv, -1, 0, LV_DIR_RIGHT);
+        lv_obj_set_scrollbar_mode(s_np, LV_SCROLLBAR_MODE_OFF);
+        build_np(s_np);
         face = s_face;
     }
 
@@ -1035,8 +1168,8 @@ static void build_overlays(void)
 {
     lv_obj_t *scr = lv_screen_active();
 
-    /* Page dots. */
-    for (int i = 0; i < 2 && s_tv; i++) {
+    /* Page dots: now playing, face, settings. */
+    for (int i = 0; i < 3 && s_tv; i++) {
         lv_obj_t *d = lv_obj_create(scr);
         lv_obj_remove_style_all(d);
         lv_obj_set_size(d, 8, 8);
@@ -1044,7 +1177,7 @@ static void build_overlays(void)
         lv_obj_set_style_bg_opa(d, LV_OPA_COVER, 0);
         lv_obj_set_style_bg_color(d, lv_color_hex(COLOR_DOT_OFF), 0);
         lv_obj_remove_flag(d, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_align(d, LV_ALIGN_BOTTOM_MID, i ? 8 : -8, -14);
+        lv_obj_align(d, LV_ALIGN_BOTTOM_MID, (i - 1) * 16, -14);
         s_dots[i] = d;
     }
 
@@ -1190,17 +1323,18 @@ static void update_chrome(float now)
     s_next_settings_tick = now + SETTINGS_TICK_S;
 
     if (s_tv) {
-        int page = lv_tileview_get_tile_active(s_tv) == s_settings;
+        lv_obj_t *active = lv_tileview_get_tile_active(s_tv);
+        int page = active == s_np ? 0 : active == s_settings ? 2 : 1;
         bool subpage = muse_settings_ui_in_subpage();
-        bool swipe = !page || !subpage;
+        bool swipe = page != 2 || !subpage;
         if (swipe != lv_obj_has_flag(s_tv, LV_OBJ_FLAG_SCROLLABLE)) {
             lv_obj_set_flag(s_tv, LV_OBJ_FLAG_SCROLLABLE, swipe);
         }
         int shown = page * 2 + subpage;
         if (shown != s_shown_page) {
-            for (int i = 0; i < 2; i++) {
+            for (int i = 0; i < 3; i++) {
                 lv_obj_set_style_bg_color(s_dots[i], lv_color_hex(i == page ? COLOR_ACCENT : COLOR_DOT_OFF), 0);
-                lv_obj_set_flag(s_dots[i], LV_OBJ_FLAG_HIDDEN, page && subpage);
+                lv_obj_set_flag(s_dots[i], LV_OBJ_FLAG_HIDDEN, page == 2 && subpage);
             }
             s_shown_page = shown;
         }
@@ -1498,6 +1632,7 @@ static void frame_tick(lv_timer_t *timer)
     }
     (void)timer;
     image_sync();
+    np_apply_pending();
     float mode_t;
     muse_mode_t mode = muse_state_mode(&mode_t);
     float now = (float)esp_timer_get_time() / 1e6f;

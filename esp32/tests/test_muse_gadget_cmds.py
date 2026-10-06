@@ -180,6 +180,18 @@ class MuseGadgetCmdsSourceTest(unittest.TestCase):
         cmake = (ROOT / "components/muse/CMakeLists.txt").read_text()
         self.assertIn('"muse_gadget_options.c"', cmake)
 
+    def test_now_playing_is_advertised_dispatched_and_built(self):
+        source = SOURCE.read_text()
+        add = source[source.index("void muse_gadget_add_commands("):]
+        block = add[add.index("#if CONFIG_MUSE_HATCH"):]
+        self.assertIn('"media.update"', block[:block.index("#endif")])
+        body = source[source.index("cJSON *muse_gadget_command("):]
+        self.assertIn("now_playing_command(params)", body[:body.index("\n}\n")])
+        ui = (ROOT / "components/muse/muse_ui.c").read_text()
+        self.assertIn("lv_tileview_add_tile(s_tv, -1, 0, LV_DIR_RIGHT)", ui)
+        self.assertIn("void muse_ui_now_playing(", ui)
+        self.assertIn("static lv_obj_t *s_dots[3];", ui)
+
     def test_buttons_draw_showable_text_and_send_the_original(self):
         # Review fix: unscii-16 has no curly quotes; a tap still sends Muse its own words.
         opts = (ROOT / "components/muse/muse_gadget_options.c").read_text()

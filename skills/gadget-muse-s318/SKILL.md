@@ -165,6 +165,27 @@ when the user presses talk, or after 30 seconds. A new call replaces them.
 - Keep labels short and distinct; don't offer "Other" or "Something else": the
   user can always just press talk.
 
+### media.update
+
+Updates the Now Playing tile: swipe right from the avatar to see it (third
+page dot). All parameters are optional strings; a missing one leaves that
+field unchanged.
+
+| Parameter | What it shows |
+|---|---|
+| `player` | Which player, e.g. Kitchen |
+| `title` | Track title |
+| `artist` | Artist name |
+| `album` | Album name |
+| `state` | `playing`, `paused` or `idle` |
+
+- Call it when the music changes — after you poll the Music Assistant bridge
+  (`ma.now_playing`) and the track, player or state differs from what the tile
+  last showed. A poll loop every 30-60 s keeps it fresh.
+- When nothing is playing anywhere, send `title` as empty and `state` as
+  `idle`; the tile shows "Nothing playing".
+- Don't call it just to test it.
+
 ### device.health
 
 Basic health, including the battery. For a plain battery question, prefer
