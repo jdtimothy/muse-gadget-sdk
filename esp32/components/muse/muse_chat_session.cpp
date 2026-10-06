@@ -131,12 +131,12 @@ static const char *TAG = "muse_chat_session";
 
 /* ---- Voice task <-> session task ---- */
 
-enum cmd_type_t : uint8_t { CMD_CONNECT, CMD_FORGET, CMD_BEGIN, CMD_END, CMD_CANCEL, CMD_TEXT, CMD_TEXT_CANCEL, CMD_TAP, CMD_WAKE };
+enum cmd_type_t : uint8_t { CMD_CONNECT, CMD_FORGET, CMD_BEGIN, CMD_END, CMD_CANCEL, CMD_TEXT, CMD_TEXT_CANCEL, CMD_TAP, CMD_QUIET, CMD_WAKE };
 
 struct cmd_t {
     cmd_type_t type;
     uint32_t gen;
-    char *text;              /* CMD_TEXT, CMD_TAP: malloc'd, freed by the session task */
+    char *text;              /* CMD_TEXT, CMD_TAP, CMD_QUIET: malloc'd, freed by the session task */
 };
 
 struct ev_t {
@@ -217,6 +217,7 @@ struct turn_t {
     uint32_t gen;
     bool text;               /* typed at the console: the reply goes there, unspoken */
     bool tap;                /* a tapped reply option: text in, the reply spoken */
+    bool quiet;              /* a Now Playing press (muse_hatch_quiet_turn): typed, reported nowhere */
     bool end_requested, end_sent, chat_posted, acked;
     int64_t dict_id, chat_id;
     int64_t start_us, end_sent_us, chat_us, last_event_us, last_content_us;
@@ -259,6 +260,8 @@ enum mark_t : uint8_t { M_RELEASE, M_SENT, M_ACK, M_TEXT, M_DONE, M_TTS, M_MP3, 
 static const char *const MARK_NAMES[M_COUNT] = { "release", "sent", "ack", "text", "done", "tts", "mp3", "audio" };
 static int64_t s_marks[M_COUNT];
 static char s_reply_shown[EV_TEXT];   /* the pre-speech caption last sent */
+static bool s_quiet_next;                   /* the next turn_start() is a quiet turn */
+static std::atomic<bool> s_quiet_open{false};   /* muse_hatch_quiet_active() */
 
 static void mark(mark_t m);
 static bool open_note(void);
@@ -957,6 +960,9 @@ static void turn_reset_streams(void)
 
 static void turn_finish(void)
 {
+    if (s_turn.quiet) {
+        s_quiet_open = false;
+    }
     turn_reset_streams();
     s_turn.phase = P_IDLE;
     s_turn.dict_id = s_turn.chat_id = 0;
@@ -972,7 +978,7 @@ static void turn_finish(void)
 static void turn_fail(const char *why)
 {
     ESP_LOGW(TAG, "turn failed: %s", why);
-    if (s_turn.text) {
+    if (s_turn.text && !s_turn.quiet) {
         muse_hatch_console("error", why, nullptr);
     }
     emit(MUSE_HATCH_EV_ERROR, why);
@@ -982,7 +988,7 @@ static void turn_fail(const char *why)
 /* Ends the turn once its reply is in; `complete` is false when it was cut off. */
 static void turn_done(bool complete)
 {
-    if (s_turn.text) {
+    if (s_turn.text && !s_turn.quiet) {
         muse_hatch_console("done", nullptr, "\"messages\":%d,\"complete\":%s", s_turn.nmsgs,
                            complete ? "true" : "false");
     }
@@ -1009,6 +1015,8 @@ static bool turn_start(uint32_t gen, bool text)
     s_turn.texts = texts;
     s_turn.gen = gen;
     s_turn.text = text;
+    s_turn.quiet = s_quiet_next;
+    s_quiet_next = false;
     s_turn.tts_msg = -1;
     memset(s_marks, 0, sizeof(s_marks));
     s_reply_shown[0] = '\0';
@@ -1252,6 +1260,26 @@ static void tap_begin(uint32_t gen, const char *message, const char *caption)
     send_chat(message, "text");
 }
 
+/* A Now Playing press (muse_gadget_media.c): a typed turn that reports
+ * nowhere, so nothing is spoken, captioned or printed; Muse answers it with
+ * a media.update. A newer press replaces it, and a voice press ends it, as it
+ * ends any typed turn. Refused while a voice, tap or console turn runs. */
+static void quiet_begin(const char *text)
+{
+    if (s_turn.phase != P_IDLE && !s_turn.quiet) {
+        ESP_LOGI(TAG, "quiet turn refused: another turn is running");
+        s_quiet_open = false;
+        return;
+    }
+    s_quiet_next = true;
+    if (!turn_start(0, true)) {
+        return;   /* turn_fail() closed it */
+    }
+    s_quiet_open = true;   /* turn_start() closed the one it replaced */
+    ESP_LOGI(TAG, "quiet turn: %u bytes", (unsigned)strlen(text));
+    send_chat(text, "text");
+}
+
 static void on_dictation_line(cJSON *line)
 {
     const char *type = cJSON_GetStringValue(cJSON_GetObjectItem(line, "type"));
@@ -1400,11 +1428,13 @@ static void message_done(int i, const char *final_text)
     if (s_turn.text) {
         /* The whole text if the pieces didn't add up to it (a line skipped, say): the reader uses it instead. */
         size_t n = m.len;
-        if (final_text && final_text[0] && strlen(final_text) != m.len) {
-            n = strlen(final_text);
-            muse_hatch_console("final", final_text, "\"msg\":%d", i);
+        if (!s_turn.quiet) {
+            if (final_text && final_text[0] && strlen(final_text) != m.len) {
+                n = strlen(final_text);
+                muse_hatch_console("final", final_text, "\"msg\":%d", i);
+            }
+            muse_hatch_console("message_done", nullptr, "\"msg\":%d,\"bytes\":%u", i, (unsigned)n);
         }
-        muse_hatch_console("message_done", nullptr, "\"msg\":%d,\"bytes\":%u", i, (unsigned)n);
         ESP_LOGI(TAG, "message %s done (%u chars)", m.id, (unsigned)n);
         return;
     }
@@ -1457,7 +1487,7 @@ static void on_event(cJSON *line)
         } else if (status) {
             s_turn.agent_busy = status[0] && strcmp(status, "completed") && strcmp(status, "failed");
         }
-        if (s_turn.text && s_turn.agent_busy != was) {
+        if (s_turn.text && !s_turn.quiet && s_turn.agent_busy != was) {
             muse_hatch_console("busy", nullptr, "\"on\":%s", s_turn.agent_busy ? "true" : "false");
         }
         s_turn.last_event_us = now_us();
@@ -1482,7 +1512,9 @@ static void on_event(cJSON *line)
         if (text && text[0] && s_turn.text) {
             mark(M_TEXT);
             m.len += strlen(text);
-            muse_hatch_console("text", text, "\"msg\":%d", i);
+            if (!s_turn.quiet) {
+                muse_hatch_console("text", text, "\"msg\":%d", i);
+            }
         } else if (text && text[0]) {
             mark(M_TEXT);
             append_text(m, text);
@@ -2004,6 +2036,10 @@ static void handle(const cmd_t &cmd)
         }
         free(cmd.text);
         break;
+    case CMD_QUIET:
+        quiet_begin(cmd.text);
+        free(cmd.text);
+        break;
     case CMD_WAKE:   /* only ends hatch_task's resting wait */
         break;
     }
@@ -2236,6 +2272,28 @@ extern "C" bool muse_hatch_tap_turn(const char *message, const char *caption)
         return false;
     }
     return true;
+}
+
+extern "C" bool muse_hatch_quiet_turn(const char *text)
+{
+    char *copy = strdup(text);
+    if (!s_cmds || !copy) {
+        free(copy);
+        return false;
+    }
+    cmd_t cmd{ CMD_QUIET, 0, copy };
+    s_quiet_open = true;
+    if (xQueueSend(s_cmds, &cmd, 0) != pdTRUE) {
+        s_quiet_open = false;
+        free(copy);
+        return false;
+    }
+    return true;
+}
+
+extern "C" bool muse_hatch_quiet_active(void)
+{
+    return s_quiet_open.load();
 }
 
 extern "C" muse_hatch_ev_t muse_hatch_turn_event(char *text, size_t cap)

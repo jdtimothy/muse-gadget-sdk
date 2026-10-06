@@ -138,6 +138,14 @@ void muse_hatch_text_cancel(void);
  * `caption` as its heard text. False if the session can't take it now. */
 bool muse_hatch_tap_turn(const char *message, const char *caption);
 
+/* A Now Playing press (muse_gadget_media.c): posts `text` (copied) as a typed
+ * turn whose reply goes nowhere: not spoken, captioned or printed. False if
+ * the session can't take it now. muse_hatch_quiet_active() stays true until
+ * it ends, is refused because another turn is running, or a newer one
+ * replaces it. */
+bool muse_hatch_quiet_turn(const char *text);
+bool muse_hatch_quiet_active(void);
+
 /*
  * Prints one "@chat" line per call (more if `text` is long): the type, then the
  * printf-style `fields` (JSON members, or NULL), then `text` escaped (or none).

@@ -227,6 +227,28 @@ class MuseGadgetCmdsSourceTest(unittest.TestCase):
         self.assertIn('send_chat(message, "text")', tap)
         self.assertIn("if (!s_turn.tap) {", session)          # no "note sent" caption for a tap
 
+    def test_quiet_turn_in_the_chat_session(self):
+        # Review Focus 3: a Now Playing press is a typed turn that reports nowhere.
+        chat_h = (ROOT / "components/muse/muse_chat.h").read_text()
+        self.assertIn("bool muse_hatch_quiet_turn(const char *text);", chat_h)
+        self.assertIn("bool muse_hatch_quiet_active(void);", chat_h)
+        session = (ROOT / "components/muse/muse_chat_session.cpp").read_text()
+        self.assertIn("CMD_QUIET", session)
+        quiet = session[session.index("static void quiet_begin("):]
+        quiet = quiet[:quiet.index("\n}\n")]
+        self.assertIn("turn_start(0, true)", quiet)            # typed: no events reach the voice task
+        self.assertIn("s_quiet_next = true;", quiet)
+        self.assertIn('send_chat(text, "text")', quiet)
+        start = session[session.index("static bool turn_start("):]
+        self.assertIn("s_turn.quiet = s_quiet_next;", start[:start.index("\n}\n")])
+        finish = session[session.index("static void turn_finish("):]
+        self.assertIn("s_quiet_open = false;", finish[:finish.index("\n}\n")])
+        # Every console report of a typed turn's progress skips quiet ones.
+        self.assertEqual(session.count("if (s_turn.text && !s_turn.quiet) {"), 2)   # turn_fail, turn_done
+        self.assertIn("if (s_turn.text && !s_turn.quiet && s_turn.agent_busy != was) {", session)
+        self.assertRegex(session, r"if \(!s_turn\.quiet\) \{\s*\n\s*if \(final_text && final_text\[0\]")
+        self.assertRegex(session, r'if \(!s_turn\.quiet\) \{\s*\n\s*muse_hatch_console\("text", text')
+
     def test_voice_task_takes_taps(self):
         voice = (ROOT / "components/muse/muse_voice.c").read_text()
         self.assertIn('#include "muse_gadget_options.h"', voice)
