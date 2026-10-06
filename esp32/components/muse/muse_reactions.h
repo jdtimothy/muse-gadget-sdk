@@ -61,6 +61,36 @@ static const char *const MUSE_REACTION_NAMES[MUSE_REACT_COUNT] = {
     "love, laugh, excited, surprised, confused, sad, grumpy, sleepy, nervous, cool, wink, " \
     "yes, no, celebrate, sunny, rainy, stormy, cold, windy, hot or rainbow"
 
+/* Built-in animations the gadget starts itself (the idle picker and the
+ * dance, muse_gadget_react.c), drawn like reactions. Not Muse's to call:
+ * they're outside MUSE_REACTION_NAMES and muse_reaction_find(). */
+typedef enum {
+    MUSE_ACT_DANCE = MUSE_REACT_COUNT,
+    MUSE_ACT_STRETCH,
+    MUSE_ACT_HUM,
+    MUSE_ACT_BUTTERFLY,
+    MUSE_ACT_DOZE,
+    MUSE_ACT_PACE,
+    MUSE_ANIM_COUNT,
+} muse_activity_t;
+
+/* A reaction's or built-in animation's name, for logs and previews. */
+static inline const char *muse_anim_name(int id)
+{
+    static const char *const ACTS[] = { "dance", "stretch", "hum", "butterfly", "doze", "pace" };
+    if (id >= 0 && id < MUSE_REACT_COUNT) {
+        return MUSE_REACTION_NAMES[id];
+    }
+    return id < MUSE_ANIM_COUNT ? ACTS[id - MUSE_REACT_COUNT] : "?";
+}
+
+/* How long a built-in animation plays, s. */
+static inline float muse_act_secs(int id)
+{
+    static const float SECS[] = { 30, 3, 5, 5, 6, 6 };
+    return id >= MUSE_REACT_COUNT && id < MUSE_ANIM_COUNT ? SECS[id - MUSE_REACT_COUNT] : 0;
+}
+
 #define MUSE_REACT_SECS_DEFAULT 4
 #define MUSE_REACT_SECS_MAX 30
 #define MUSE_REACT_IN 0.25f    /* seconds to come in */

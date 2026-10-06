@@ -27,6 +27,7 @@
 #include "muse_reactions.h"
 #include "muse_reply_options.h"
 #include "muse_now_playing.h"
+#include "muse_avatar_idle.h"
 #include "gadget_pure.inc"
 
 static int failures;
@@ -849,6 +850,62 @@ static void test_media_result(void)
     }
 }
 
+/* The six built-in animations: named, timed, and not Muse's to call. */
+static void test_activity_ids(void)
+{
+    CHECK((int)MUSE_ACT_DANCE == (int)MUSE_REACT_COUNT && (int)MUSE_ANIM_COUNT == (int)MUSE_REACT_COUNT + 6);
+    CHECK(!strcmp(muse_anim_name(MUSE_ACT_DANCE), "dance") && !strcmp(muse_anim_name(MUSE_ACT_PACE), "pace"));
+    CHECK(!strcmp(muse_anim_name(MUSE_REACT_LOVE), "love"));
+    CHECK(muse_act_secs(MUSE_ACT_DANCE) == 30.0f && muse_act_secs(MUSE_ACT_STRETCH) == 3.0f);
+    CHECK(muse_act_secs(MUSE_ACT_HUM) == 5.0f && muse_act_secs(MUSE_ACT_DOZE) == 6.0f);
+    static const char *const MINE[] = { "dance", "stretch", "hum", "butterfly", "doze", "pace" };
+    for (int i = 0; i < 6; i++) {
+        CHECK(muse_reaction_find(MINE[i]) == -1);   /* avatar.react refuses them */
+    }
+}
+
+static void test_idle_picker(void)
+{
+    muse_idle_t s = { 0 };
+    /* First frame: waits a gap, even calm. */
+    CHECK(muse_idle_step(&s, 100, true, 1000, 300, 7) == 0 && s.next_at >= 110 && s.next_at <= 130);
+    float due = s.next_at;
+    CHECK(muse_idle_step(&s, due - 0.1f, true, 1000, 300, 7) == 0);
+    int a = muse_idle_step(&s, due, true, 1000, 300, 12345);
+    CHECK(a >= MUSE_ACT_STRETCH && a <= MUSE_ACT_PACE);
+    /* Never the same twice running, and the gap counts after it ends. */
+    for (uint32_t r = 0; r < 200; r++) {
+        int prev = s.last;
+        int b = muse_idle_step(&s, s.next_at, true, 1000, 300, r * 2654435761u);
+        CHECK(b && b != prev && b != MUSE_ACT_DANCE);
+    }
+    /* Doze only after the quiet spell. */
+    for (uint32_t r = 0; r < 200; r++) {
+        CHECK(muse_idle_step(&s, s.next_at, true, 299, 300, r * 2246822519u) != MUSE_ACT_DOZE);
+    }
+    bool dozed = false;
+    for (uint32_t r = 0; r < 200 && !dozed; r++) {
+        dozed = muse_idle_step(&s, s.next_at, true, 301, 300, r * 3266489917u) == MUSE_ACT_DOZE;
+    }
+    CHECK(dozed);
+    /* Anything not calm restarts the gap. */
+    float now = s.next_at;
+    CHECK(muse_idle_step(&s, now, false, 1000, 300, 99) == 0 && s.next_at >= now + 10 && s.next_at <= now + 30);
+    CHECK(muse_idle_gap(0) == MUSE_IDLE_GAP_MIN && muse_idle_gap(1000) == MUSE_IDLE_GAP_MAX);
+    /* Review Focus 1: doze before the screen sleeps. */
+    CHECK(muse_idle_doze_after(0) == 300 && muse_idle_doze_after(600) == 300);
+    CHECK(muse_idle_doze_after(120) == 100 && muse_idle_doze_after(30) == 10);
+}
+
+static void test_dance_rules(void)
+{
+    CHECK(muse_dance_on_media("playing", false) == MUSE_DANCE_START);
+    CHECK(muse_dance_on_media("paused", false) == MUSE_DANCE_STOP);
+    CHECK(muse_dance_on_media("idle", false) == MUSE_DANCE_STOP);
+    CHECK(muse_dance_on_media(NULL, false) == MUSE_DANCE_KEEP);   /* an update without a state */
+    CHECK(muse_dance_on_media(NULL, true) == MUSE_DANCE_START);   /* back, play/pause, skip */
+}
+
 int main(void)
 {
     test_parse_settings();
@@ -882,6 +939,9 @@ int main(void)
     test_np_tap_refreshes();
     test_parse_media();
     test_media_result();
+    test_activity_ids();
+    test_idle_picker();
+    test_dance_rules();
     if (failures) {
         fprintf(stderr, "%d check(s) failed\n", failures);
         return 1;
