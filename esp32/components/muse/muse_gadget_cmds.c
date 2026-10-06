@@ -839,6 +839,7 @@ static cJSON *options_result(int n)
 #include "muse_gadget_react.h"
 #include "muse_settings.h"
 #include "muse_state.h"
+#include "muse_ui.h"
 
 static const char *TAG = "muse_gadget";
 
@@ -1044,6 +1045,27 @@ static cJSON *options_command(const cJSON *params)
     muse_options_set(labels, n);
     return options_result(n);
 }
+
+/* media.update: optional strings player, title, artist, album, state.
+ * A missing field leaves that tile field unchanged. */
+static cJSON *now_playing_command(const cJSON *params)
+{
+    static const char *const fields[5] = {"player", "title", "artist", "album", "state"};
+    const char *vals[5] = {NULL, NULL, NULL, NULL, NULL};
+    if (cJSON_IsObject(params)) {
+        for (int i = 0; i < 5; i++) {
+            const cJSON *v = cJSON_GetObjectItemCaseSensitive(params, fields[i]);
+            if (v && !cJSON_IsString(v)) {
+                return gadget_error("invalid_params", "every media.update field must be a string");
+            }
+            vals[i] = v ? v->valuestring : NULL;
+        }
+    }
+    muse_ui_now_playing(vals[0], vals[1], vals[2], vals[3], vals[4]);
+    cJSON *payload;
+    cJSON *result = gadget_ok(&payload);
+    return result;
+}
 #endif
 
 static cJSON *param(const char *type, const char *description)
@@ -1111,6 +1133,15 @@ void muse_gadget_add_commands(cJSON *commands)
     cJSON_AddItemToObject(oreq, "options", opts);
     add_command(commands, "display.options", "Show reply buttons after the spoken reply; a tap sends that reply.",
                 oreq, NULL);
+    cJSON *mopt = cJSON_CreateObject();
+    cJSON_AddItemToObject(mopt, "player", param("string", "Player name, e.g. Kitchen."));
+    cJSON_AddItemToObject(mopt, "title", param("string", "Track title."));
+    cJSON_AddItemToObject(mopt, "artist", param("string", "Artist name."));
+    cJSON_AddItemToObject(mopt, "album", param("string", "Album name."));
+    cJSON_AddItemToObject(mopt, "state", param("string", "playing, paused or idle."));
+    add_command(commands, "media.update",
+                "Update the Now Playing tile (swipe right from the avatar).",
+                NULL, mopt);
 #endif
 }
 
@@ -1132,6 +1163,9 @@ cJSON *muse_gadget_command(const char *command, cJSON *params, const char *reque
     }
     if (!strcmp(command, "display.options")) {
         return options_command(params);
+    }
+    if (!strcmp(command, "media.update")) {
+        return now_playing_command(params);
     }
 #else
     (void)request_id;
