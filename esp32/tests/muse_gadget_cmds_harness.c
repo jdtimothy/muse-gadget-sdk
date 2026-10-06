@@ -744,6 +744,88 @@ static void test_np_dim(void)
     CHECK(muse_np_dim565(0xF800, 0) == 0);
 }
 
+/* parse_media on parsed JSON. The fields point into *p, which the caller deletes. */
+static bool media(const char *json, cJSON **p, muse_np_fields_t *f, char *err)
+{
+    *p = NULL;
+    if (json) {
+        *p = cJSON_Parse(json);
+        if (!*p) {
+            fprintf(stderr, "bad test JSON: %s\n", json);
+            exit(2);
+        }
+    }
+    err[0] = '\0';
+    return parse_media(*p, f, err, 160);
+}
+
+static void test_parse_media(void)
+{
+    muse_np_fields_t f;
+    cJSON *p;
+    char err[160];
+    CHECK(media("{\"title\":\"So What\",\"artist\":\"Miles Davis\",\"state\":\"playing\",\"player_id\":\"ap12ab\","
+                "\"art_url\":\"http://192.168.7.132:8095/imageproxy?path=x&size=448&fmt=jpeg\"}", &p, &f, err) &&
+          !strcmp(f.title, "So What") && !strcmp(f.artist, "Miles Davis") && !strcmp(f.state, "playing") &&
+          !strcmp(f.player_id, "ap12ab") && !strncmp(f.art_url, "http://", 7) && !f.album && !f.player);
+    cJSON_Delete(p);
+    /* Review Focus 1: an older skill's call, and none at all. */
+    CHECK(media("{\"player\":\"Kitchen\",\"title\":\"x\"}", &p, &f, err) && !f.player_id && !f.art_url);
+    cJSON_Delete(p);
+    CHECK(media("{}", &p, &f, err) && !f.title);
+    cJSON_Delete(p);
+    CHECK(media(NULL, &p, &f, err) && !f.state);
+    CHECK(media("{\"art_url\":\"\"}", &p, &f, err) && f.art_url && !f.art_url[0]);   /* clears the art */
+    cJSON_Delete(p);
+    CHECK(media("{\"art_url\":\"https://i.scdn.co/image/ab67616d\"}", &p, &f, err));
+    cJSON_Delete(p);
+    CHECK(media("{\"state\":\"idle\",\"title\":\"\"}", &p, &f, err) && !strcmp(f.state, "idle"));
+    cJSON_Delete(p);
+    CHECK(media(json_of("art_url", "http://", 512), &p, &f, err));
+    cJSON_Delete(p);
+    CHECK(media(json_of("player_id", "", 64), &p, &f, err));
+    cJSON_Delete(p);
+    /* Refused, saying why. */
+    CHECK(!media("{\"state\":\"stopped\"}", &p, &f, err) && strstr(err, "playing, paused or idle"));
+    cJSON_Delete(p);
+    CHECK(!media("{\"title\":5}", &p, &f, err) && strstr(err, "title"));
+    cJSON_Delete(p);
+    CHECK(!media(json_of("art_url", "http://", 513), &p, &f, err) && strstr(err, "512"));
+    cJSON_Delete(p);
+    CHECK(!media("{\"art_url\":\"ftp://host/a.jpg\"}", &p, &f, err) && strstr(err, "art_url"));
+    cJSON_Delete(p);
+    CHECK(!media("{\"art_url\":\"http://host/a b.jpg\"}", &p, &f, err));
+    cJSON_Delete(p);
+    CHECK(!media("{\"art_url\":\"http://\"}", &p, &f, err));
+    cJSON_Delete(p);
+    CHECK(!media("{\"player_id\":\"\"}", &p, &f, err) && strstr(err, "player_id"));
+    cJSON_Delete(p);
+    CHECK(!media(json_of("player_id", "", 65), &p, &f, err) && strstr(err, "64"));
+    cJSON_Delete(p);
+    CHECK(!media("{\"player_id\":\"a\\nb\"}", &p, &f, err));
+    cJSON_Delete(p);
+    /* A misspelled or unknown parameter is refused, not ignored. */
+    CHECK(!media("{\"title\":\"x\",\"duration\":200}", &p, &f, err) && strstr(err, "duration"));
+    cJSON_Delete(p);
+    /* audio.play_url still takes https only. */
+    gadget_sound_t s;
+    CHECK(!sound("audio.play_url", "{\"url\":\"http://example.com/a.mp3\"}", &s, err));
+}
+
+static void test_media_result(void)
+{
+    static const muse_np_art_t arts[] = { MUSE_NP_ART_NONE, MUSE_NP_ART_LOADING, MUSE_NP_ART_UNCHANGED,
+                                          MUSE_NP_ART_CLEARED };
+    static const char *const names[] = { "none", "loading", "unchanged", "cleared" };
+    for (int i = 0; i < 4; i++) {
+        cJSON *r = media_result(arts[i]);
+        CHECK(cJSON_IsTrue(cJSON_GetObjectItem(r, "ok")));
+        cJSON *art = cJSON_GetObjectItem(cJSON_GetObjectItem(r, "payload"), "art");
+        CHECK(cJSON_IsString(art) && !strcmp(art->valuestring, names[i]));
+        cJSON_Delete(r);
+    }
+}
+
 int main(void)
 {
     test_parse_settings();
@@ -774,6 +856,8 @@ int main(void)
     test_np_art_scale();
     test_np_art_fit();
     test_np_dim();
+    test_parse_media();
+    test_media_result();
     if (failures) {
         fprintf(stderr, "%d check(s) failed\n", failures);
         return 1;
