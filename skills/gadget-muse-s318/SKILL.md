@@ -167,9 +167,9 @@ when the user presses talk, or after 30 seconds. A new call replaces them.
 
 ### media.update
 
-Updates the Now Playing tile: swipe right from the avatar to see it (third
-page dot). All parameters are optional strings; a missing one leaves that
-field unchanged.
+Updates the Now Playing tile: swipe right from the avatar to see it (the first
+of the three page dots: Now Playing, avatar, settings). All parameters are
+optional strings; a missing one leaves that field unchanged.
 
 | Parameter | What it shows |
 |---|---|
