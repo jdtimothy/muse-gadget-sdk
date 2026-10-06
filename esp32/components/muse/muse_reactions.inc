@@ -25,14 +25,20 @@
  * until it's mostly in (react_amount 0.3) and gives way to petting; its mouth
  * shows only in idle and thinking, so speech keeps its lip-sync. Props and
  * glow fade with react_amount.
+ *
+ * The gadget's own scenes (the dance and the idle scenes, ids from
+ * MUSE_ACT_DANCE) are rows here too, after Muse's 21; muse_gadget_react.c
+ * starts them.
  */
 #include "muse_reactions.h"
 
-typedef enum { RE_KEEP, RE_BEAD, RE_WIDE, RE_HAPPY, RE_SHUT, RE_HALF, RE_SQUINT, RE_WINK, RE_SHADES } react_eyes_t;
+typedef enum { RE_KEEP, RE_BEAD, RE_WIDE, RE_HAPPY, RE_SHUT, RE_HALF, RE_SQUINT, RE_WINK, RE_SHADES,
+               RE_FOLLOW, RE_LOOK, RE_DOZE } react_eyes_t;
 typedef enum { RB_NONE, RB_UP, RB_WORRY, RB_ANGRY, RB_QUIZ } react_brows_t;
 typedef enum { RM_KEEP, RM_SMILE, RM_GRIN, RM_O, RM_HMM, RM_FLAT, RM_FROWN, RM_WOBBLE } react_mouth_t;
-typedef enum { RV_NONE, RV_BOUNCE, RV_HOP, RV_STARTLE, RV_SWAY, RV_NOD, RV_SHAKE, RV_SHIVER } react_move_t;
-typedef enum { RA_KEEP, RA_UP, RA_HOLD } react_arms_t;
+typedef enum { RV_NONE, RV_BOUNCE, RV_HOP, RV_STARTLE, RV_SWAY, RV_NOD, RV_SHAKE, RV_SHIVER,
+               RV_DANCE, RV_STRETCH, RV_CHASE, RV_DOZE, RV_PACE } react_move_t;
+typedef enum { RA_KEEP, RA_UP, RA_HOLD, RA_DANCE, RA_STRETCH } react_arms_t;
 typedef enum { RG_NONE, RG_PINK, RG_BLUE, RG_GOLD, RG_STORM, RG_ICE } react_glow_t;
 
 typedef void (*react_prop_t)(const avatar_t *j, const muse_pose_t *p, float a);
@@ -106,6 +112,53 @@ static inline float head_top(const avatar_t *j)
 }
 
 static const char *const DROP[] = { ".#.", ".#.", "#o#", "###", ".#." };
+
+/* ---- The built-in scenes' timelines (react_t, s) ---- */
+
+static inline float smooth01(float x)
+{
+    x = x < 0 ? 0 : x > 1 ? 1 : x;
+    return x * x * (3 - 2 * x);
+}
+
+/* Stretch: how far up, 0..1: up over 0.6 s, held, down by 2.3 s. */
+static inline float stretch_up(float rt)
+{
+    return smooth01(rt / 0.6f) * (1 - smooth01((rt - 1.9f) / 0.4f));
+}
+
+#define PACE_DX 9.0f   /* px to the side, on the 64-wide grid */
+
+/* Pace: where along the walk, 0 (middle) to 1 (the side), over its 6 s:
+ * out by 2.3 s, a turn, back by 5.1 s. */
+static inline float pace_x(float rt)
+{
+    if (rt < 0.3f || rt >= 5.1f) {
+        return 0;
+    }
+    if (rt < 2.3f) {
+        return smooth01((rt - 0.3f) / 2.0f);
+    }
+    return rt < 3.1f ? 1 : 1 - smooth01((rt - 3.1f) / 2.0f);
+}
+
+static inline bool pace_walking(float rt)
+{
+    return (rt > 0.3f && rt < 2.3f) || (rt > 3.1f && rt < 5.1f);
+}
+
+/* Which side this walk goes to, -1 or 1: alternates with when it started. */
+static inline int pace_side(const muse_pose_t *p)
+{
+    return ((int)(p->t - p->react_t)) & 1 ? 1 : -1;
+}
+
+/* The butterfly: left to right across the grid in 4.6 s, bobbing. */
+static void butterfly_at(const muse_pose_t *p, float *x, float *y)
+{
+    *x = -4.0f + (W + 8.0f) * (p->react_t / 4.6f);
+    *y = 14.0f + 5.0f * sinf(p->react_t * 2.6f);
+}
 
 /* ---- Props ---- */
 
@@ -376,9 +429,70 @@ static void prop_rainbow(const avatar_t *j, const muse_pose_t *p, float a)
     }
 }
 
+static const char *const NOTE[] = { "..##", "..#.", "..#.", "###.", "##.." };
+
+/* `count` music notes floating up beside the head, fading as they rise. */
+static void notes(const avatar_t *j, const muse_pose_t *p, float a, int count)
+{
+    for (int i = 0; i < count; i++) {
+        float ph = fracf(p->react_t * 0.5f + i * 0.5f);
+        int x = iround(j->cx + (i & 1 ? -18 : 13) + sinf(ph * TAU) * 1.5f);
+        int y = iround(head_top(j) + 6 - ph * 12);
+        fstamp(NOTE, 5, x, y, C_ACC, C_ACC, a * (1.0f - ph));
+    }
+}
+
+static void prop_hum(const avatar_t *j, const muse_pose_t *p, float a)
+{
+    notes(j, p, a, 2);
+}
+
+/* Headphones: a band over the head and a cup on each side, and a note now and then. */
+static void prop_dance(const avatar_t *j, const muse_pose_t *p, float a)
+{
+    float ey = face_eye_y(j);
+    for (int x = iround(j->cx - j->a); x <= iround(j->cx + j->a); x++) {
+        float u = (x + 0.5f - j->cx) / (j->a + 1.0f);
+        if (u * u >= 1) {
+            continue;
+        }
+        int y = iround(j->cy - (j->b + 1.0f) * sqrtf(1 - u * u));
+        if (y < ey - 3) {
+            fpx(x, y, C_OUT, a);
+            fpx(x, y - 1, C_OUT, a);   /* two pixels thick */
+        }
+    }
+    static const char *const CUP[] = { "###", "#o#", "#o#", "#o#", "###" };
+    int top = iround(ey) - 3;
+    fstamp(CUP, 5, iround(j->cx - j->a) - 2, top, C_OUT, C_ACC, a);
+    fstamp(CUP, 5, iround(j->cx + j->a) - 1, top, C_OUT, C_ACC, a);
+    if (fracf(p->react_t / 3.0f) < 0.6f) {
+        notes(j, p, a, 1);
+    }
+}
+
+static void prop_butterfly(const avatar_t *j, const muse_pose_t *p, float a)
+{
+    (void)j;
+    static const char *const OPEN[] = { "##.##", "##o##", ".#o#." };
+    static const char *const SHUT[] = { ".....", ".#o#.", ".#o#." };
+    float x, y;
+    butterfly_at(p, &x, &y);
+    bool flap = fracf(p->t * 6.0f) < 0.5f;
+    fstamp(flap ? OPEN : SHUT, 3, iround(x) - 2, iround(y) - 1, C_ORANGE, C_OUT, a);
+}
+
+/* Doze's zzz, until it snaps awake at 5 s. */
+static void prop_doze(const avatar_t *j, const muse_pose_t *p, float a)
+{
+    if (p->react_t < 5.0f) {
+        prop_zzz(j, p, a);
+    }
+}
+
 /* ---- The reactions ---- */
 
-static const reaction_t REACTIONS[MUSE_REACT_COUNT] = {
+static const reaction_t REACTIONS[MUSE_ANIM_COUNT] = {
     /*                     eyes       brows     mouth      blush   glow      move        arms     back          front */
     [MUSE_REACT_LOVE] = { RE_HAPPY, RB_NONE, RM_GRIN, 0.45f, RG_PINK, RV_NONE, RA_KEEP, NULL, prop_hearts },
     [MUSE_REACT_LAUGH] = { RE_HAPPY, RB_NONE, RM_GRIN, 0.25f, RG_NONE, RV_BOUNCE, RA_KEEP, NULL, prop_twinkles },
@@ -401,6 +515,13 @@ static const reaction_t REACTIONS[MUSE_REACT_COUNT] = {
     [MUSE_REACT_WINDY] = { RE_SQUINT, RB_NONE, RM_FLAT, 0, RG_NONE, RV_SWAY, RA_KEEP, NULL, prop_wind },
     [MUSE_REACT_HOT] = { RE_KEEP, RB_NONE, RM_FLAT, 0.45f, RG_GOLD, RV_NONE, RA_KEEP, NULL, prop_heat },
     [MUSE_REACT_RAINBOW] = { RE_HAPPY, RB_NONE, RM_SMILE, 0.15f, RG_NONE, RV_NONE, RA_KEEP, prop_rainbow, NULL },
+    /* The gadget's own (muse_gadget_react.c): the dance and the idle scenes. */
+    [MUSE_ACT_DANCE] = { RE_HAPPY, RB_NONE, RM_GRIN, 0.25f, RG_NONE, RV_DANCE, RA_DANCE, NULL, prop_dance },
+    [MUSE_ACT_STRETCH] = { RE_SHUT, RB_NONE, RM_O, 0, RG_NONE, RV_STRETCH, RA_STRETCH, NULL, NULL },
+    [MUSE_ACT_HUM] = { RE_HALF, RB_NONE, RM_SMILE, 0.15f, RG_NONE, RV_SWAY, RA_KEEP, NULL, prop_hum },
+    [MUSE_ACT_BUTTERFLY] = { RE_FOLLOW, RB_NONE, RM_O, 0, RG_NONE, RV_CHASE, RA_KEEP, NULL, prop_butterfly },
+    [MUSE_ACT_DOZE] = { RE_DOZE, RB_NONE, RM_O, 0, RG_NONE, RV_DOZE, RA_KEEP, NULL, prop_doze },
+    [MUSE_ACT_PACE] = { RE_LOOK, RB_NONE, RM_SMILE, 0, RG_NONE, RV_PACE, RA_KEEP, NULL, NULL },
 };
 
 /* ---- Hooks muse_pixel_render() calls ---- */
@@ -413,7 +534,7 @@ static bool react_mode_ok(muse_mode_t m)
 /* The reaction showing, for its glow and props; NULL if none. */
 static const reaction_t *react_row(const muse_pose_t *p)
 {
-    if (p->reaction <= MUSE_REACT_NONE || p->reaction >= MUSE_REACT_COUNT || p->react_amount <= 0 ||
+    if (p->reaction <= MUSE_REACT_NONE || p->reaction >= MUSE_ANIM_COUNT || p->react_amount <= 0 ||
         !react_mode_ok(p->mode)) {
         return NULL;
     }
@@ -464,6 +585,38 @@ static void react_motion(const muse_pose_t *p, float *bob, float *lean, float *h
     case RV_NOD: *bob += sinf(rt * 9.0f) * 1.6f * a; break;
     case RV_SHAKE: *lean += sinf(rt * 14.0f) * 1.6f * a; break;
     case RV_SHIVER: *lean += sinf(t * 40.0f) * 0.6f * a; break;
+    case RV_DANCE:
+        *hop += fabsf(sinf(rt * TAU)) * 2.0f * a;      /* two bounces a second */
+        *lean += sinf(rt * TAU * 0.5f) * 2.5f * a;    /* a sway every two */
+        break;
+    case RV_STRETCH:
+        *bob -= 2.0f * stretch_up(rt) * a;              /* up on tiptoe */
+        if (rt > 2.2f && rt < 2.8f) {
+            *lean += sinf(rt * 45.0f) * 0.8f * a;       /* the little shake */
+        }
+        break;
+    case RV_CHASE: {
+        float bx, by;
+        butterfly_at(p, &bx, &by);
+        *lean += clampf((bx - 32.0f) * 0.08f, -2.5f, 2.5f) * a;   /* leans after it */
+        if (rt > 3.0f && rt < 3.6f) {
+            *hop += sinf((rt - 3.0f) / 0.6f * 3.1416f) * 3.5f * a;   /* and hops */
+        }
+        break;
+    }
+    case RV_DOZE:
+        if (rt < 5.0f) {
+            *bob += (0.5f + 0.5f * sinf(rt * 1.4f)) * 1.5f * smooth01(rt / 2.0f) * a;   /* nodding off */
+        } else {
+            *hop += 3.0f * a * expf(-(rt - 5.0f) * 5.0f);   /* snaps awake */
+        }
+        break;
+    case RV_PACE:
+        *lean += pace_x(rt) * PACE_DX * pace_side(p) * a;
+        if (pace_walking(rt)) {
+            *hop += fabsf(sinf(rt * 8.0f)) * 0.8f * a;      /* the steps */
+        }
+        break;
     default: break;
     }
 }
@@ -481,6 +634,16 @@ static void react_arms(const muse_pose_t *p, const avatar_t *j, limb_t arms[2])
         arms[1] = (limb_t){ j->cx + adx + 1.0f, j->cy - 4.0f, -2.4f - wig };
     } else if (r->arms == RA_HOLD) {
         arms[1] = (limb_t){ j->cx + 13.0f, j->cy - 5.0f, -0.15f };   /* holding the umbrella's shaft */
+    } else if (r->arms == RA_DANCE && p->react_amount >= 0.3f) {
+        float s = sinf(p->react_t * TAU * 0.5f);   /* one up while the other's down */
+        arms[0] = (limb_t){ j->cx - adx - 1.0f, j->cy - 2.0f - 2.0f * s, 1.2f + 1.1f * s };
+        arms[1] = (limb_t){ j->cx + adx + 1.0f, j->cy - 2.0f + 2.0f * s, -1.2f + 1.1f * s };
+    } else if (r->arms == RA_STRETCH && p->react_amount >= 0.3f) {
+        float up = stretch_up(p->react_t);
+        if (up > 0.05f) {
+            arms[0] = (limb_t){ j->cx - adx - 1.0f, j->cy - 4.0f * up, 2.6f * up };
+            arms[1] = (limb_t){ j->cx + adx + 1.0f, j->cy - 4.0f * up, -2.6f * up };
+        }
     }
 }
 
@@ -552,6 +715,34 @@ static bool react_eyes(const muse_pose_t *p, float lx, float rx, float ey, float
         }
         px(l - 2, y + 1, C_SHINE);
         px(rr - 1, y + 1, C_SHINE);
+        break;
+    }
+    case RE_FOLLOW: {
+        float bx, by;
+        butterfly_at(p, &bx, &by);
+        float fx = clampf((bx - (lx + rx) * 0.5f) / 20.0f, -1, 1), fy = clampf((by - ey) / 20.0f, -1, 1);
+        draw_eye(lx, ey, open, EYES_WIDE, fx, fy);
+        draw_eye(rx, ey, open, EYES_WIDE, fx, fy);
+        break;
+    }
+    case RE_LOOK: {
+        float rt = p->react_t, g = 0;
+        if (rt > 0.3f && rt < 2.3f) {
+            g = (float)pace_side(p);
+        } else if (rt > 3.1f && rt < 5.1f) {
+            g = (float)-pace_side(p);
+        }
+        draw_eye(lx, ey, open, EYES_NORMAL, g, 0.1f);
+        draw_eye(rx, ey, open, EYES_NORMAL, g, 0.1f);
+        break;
+    }
+    case RE_DOZE: {
+        float rt = p->react_t;
+        bool awake = rt >= 5.0f;
+        float o = awake ? open : 0.45f * (1.0f - smooth01((rt - 0.5f) / 3.0f));
+        o = o < open ? o : open;   /* blinks still close them */
+        draw_eye(lx, ey, o, awake ? EYES_WIDE : EYES_NORMAL, gx, awake ? gy : 0.4f);
+        draw_eye(rx, ey, o, awake ? EYES_WIDE : EYES_NORMAL, gx, awake ? gy : 0.4f);
         break;
     }
     default:

@@ -66,9 +66,9 @@ static void test_each_reaction_shows(void)
     static uint8_t plain[W * H];
     render(MUSE_MODE_IDLE, 0, 0, 0);
     memcpy(plain, s_frame, sizeof(plain));
-    for (int r = 1; r < MUSE_REACT_COUNT; r++) {
+    for (int r = 1; r < MUSE_ANIM_COUNT; r++) {
         render(MUSE_MODE_IDLE, r, 0, 0);
-        CHECK(differs(plain, s_frame) >= 8, "%s barely shows (%d cells)", MUSE_REACTION_NAMES[r],
+        CHECK(differs(plain, s_frame) >= 8, "%s barely shows (%d cells)", muse_anim_name(r),
               differs(plain, s_frame));
     }
 }
@@ -81,9 +81,9 @@ static void test_some_modes_ignore_reactions(void)
     for (size_t m = 0; m < sizeof(MODES) / sizeof(MODES[0]); m++) {
         render(MODES[m], 0, 0, 0);
         memcpy(plain, s_frame, sizeof(plain));
-        for (int r = 1; r < MUSE_REACT_COUNT; r++) {
+        for (int r = 1; r < MUSE_ANIM_COUNT; r++) {
             render(MODES[m], r, 0, 0);
-            CHECK(differs(plain, s_frame) == 0, "%s shows in mode %d", MUSE_REACTION_NAMES[r], (int)MODES[m]);
+            CHECK(differs(plain, s_frame) == 0, "%s shows in mode %d", muse_anim_name(r), (int)MODES[m]);
         }
     }
 }
@@ -91,14 +91,14 @@ static void test_some_modes_ignore_reactions(void)
 /* Review focus 1: listening and speaking keep their own mouth; idle and thinking take the reaction's. */
 static void test_speech_keeps_its_mouth(void)
 {
-    for (int r = 1; r < MUSE_REACT_COUNT; r++) {
+    for (int r = 1; r < MUSE_ANIM_COUNT; r++) {
         muse_pose_t p = { .mode = MUSE_MODE_SPEAKING, .t = 1, .reaction = r, .react_amount = 1 };
-        CHECK(!react_mouth(&p, 32, 30), "%s takes the talking mouth", MUSE_REACTION_NAMES[r]);
+        CHECK(!react_mouth(&p, 32, 30), "%s takes the talking mouth", muse_anim_name(r));
         p.mode = MUSE_MODE_LISTENING;
-        CHECK(!react_mouth(&p, 32, 30), "%s takes the listening mouth", MUSE_REACTION_NAMES[r]);
+        CHECK(!react_mouth(&p, 32, 30), "%s takes the listening mouth", muse_anim_name(r));
         p.mode = MUSE_MODE_IDLE;
         bool own = REACTIONS[r].mouth != RM_KEEP;
-        CHECK(react_mouth(&p, 32, 30) == own, "%s idle mouth", MUSE_REACTION_NAMES[r]);
+        CHECK(react_mouth(&p, 32, 30) == own, "%s idle mouth", muse_anim_name(r));
     }
 }
 
@@ -115,18 +115,18 @@ static void test_petting_wins(void)
     p.react_amount = 0;
     CHECK(react_row(&p) == NULL, "gone");
     p.react_amount = 1;
-    p.reaction = MUSE_REACT_COUNT;
+    p.reaction = MUSE_ANIM_COUNT;
     CHECK(react_row(&p) == NULL, "an unknown id");
 }
 
 /* Every reaction has a row with something in it. */
 static void test_table(void)
 {
-    for (int r = 1; r < MUSE_REACT_COUNT; r++) {
+    for (int r = 1; r < MUSE_ANIM_COUNT; r++) {
         const reaction_t *x = &REACTIONS[r];
         bool any = x->eyes != RE_KEEP || x->brows != RB_NONE || x->mouth != RM_KEEP || x->glow != RG_NONE ||
                    x->move != RV_NONE || x->arms != RA_KEEP || x->back || x->front;
-        CHECK(any, "%s has an empty row", MUSE_REACTION_NAMES[r]);
+        CHECK(any, "%s has an empty row", muse_anim_name(r));
     }
 }
 
@@ -161,12 +161,12 @@ static void test_reaction_brows_replace_the_modes(void)
 {
     static const muse_mode_t MODES[] = { MUSE_MODE_THINKING, MUSE_MODE_LISTENING, MUSE_MODE_IDLE };
     for (size_t m = 0; m < sizeof(MODES) / sizeof(MODES[0]); m++) {
-        for (int r = 1; r < MUSE_REACT_COUNT; r++) {
+        for (int r = 1; r < MUSE_ANIM_COUNT; r++) {
             if (REACTIONS[r].brows == RB_NONE) {
                 continue;
             }
             render(MODES[m], r, 0, 0);
-            CHECK(count(C_BROW) <= 4, "%s in mode %d draws %d brow pixels", MUSE_REACTION_NAMES[r],
+            CHECK(count(C_BROW) <= 4, "%s in mode %d draws %d brow pixels", muse_anim_name(r),
                   (int)MODES[m], count(C_BROW));
         }
     }
@@ -178,6 +178,57 @@ static void test_reaction_brows_replace_the_modes(void)
     CHECK(!react_hides_dots(&p), "no reaction");
 }
 
+/* The scenes' motion, at known moments. */
+static void test_activity_motion(void)
+{
+    muse_pose_t p = { .mode = MUSE_MODE_IDLE, .t = 50, .react_amount = 1 };
+    float bob, lean, hop;
+#define MOTION(id, rt) (p.reaction = (id), p.react_t = (rt), bob = lean = hop = 0, react_motion(&p, &bob, &lean, &hop))
+    /* Pace: 9 px to a side by 2.3 s, back by 5.1 s, never further (Review Focus 5). */
+    MOTION(MUSE_ACT_PACE, 2.5f);
+    CHECK(fabsf(lean) >= 8.9f && fabsf(lean) <= 9.0f, "pace reaches the side (lean %.1f)", lean);
+    for (float rt = 0; rt < 6.0f; rt += 0.05f) {
+        MOTION(MUSE_ACT_PACE, rt);
+        CHECK(fabsf(lean) <= 9.0f, "pace goes too far at %.2f", rt);
+    }
+    MOTION(MUSE_ACT_PACE, 5.5f);
+    CHECK(fabsf(lean) < 0.01f, "pace ends in the middle");
+    /* The dance bounces on the beat and sways. */
+    MOTION(MUSE_ACT_DANCE, 0.25f);
+    CHECK(hop > 1.5f, "dance bounces");
+    float l1 = lean;
+    MOTION(MUSE_ACT_DANCE, 1.5f);
+    CHECK(l1 * lean < 0, "dance sways both ways");
+    /* Doze snaps awake at 5 s. */
+    MOTION(MUSE_ACT_DOZE, 5.05f);
+    CHECK(hop > 1.0f, "doze snaps awake");
+    /* The butterfly crosses the whole canvas; the hop follows it. */
+    float x0, y0, x1, y1;
+    p.reaction = MUSE_ACT_BUTTERFLY;
+    p.react_t = 0;
+    butterfly_at(&p, &x0, &y0);
+    p.react_t = 4.6f;
+    butterfly_at(&p, &x1, &y1);
+    CHECK(x0 < 0 && x1 > W, "butterfly crosses (%.0f to %.0f)", x0, x1);
+    MOTION(MUSE_ACT_BUTTERFLY, 3.3f);
+    CHECK(hop > 2.0f, "a hop after the butterfly");
+#undef MOTION
+}
+
+/* The dance wears headphones: outline pixels above the face that the plain idle frame lacks. */
+static void test_dance_wears_headphones(void)
+{
+    render(MUSE_MODE_IDLE, 0, 0, 0);
+    static uint8_t plain[W * H];
+    memcpy(plain, s_frame, sizeof(plain));
+    render(MUSE_MODE_IDLE, MUSE_ACT_DANCE, 0, 0);
+    int band = 0;
+    for (int i = 0; i < W * H; i++) {
+        band += s_frame[i] == C_OUT && plain[i] != C_OUT;
+    }
+    CHECK(band >= 20, "the headphones barely show (%d new outline pixels)", band);
+}
+
 int main(void)
 {
     test_table();
@@ -187,6 +238,8 @@ int main(void)
     test_some_modes_ignore_reactions();
     test_speech_keeps_its_mouth();
     test_petting_wins();
+    test_activity_motion();
+    test_dance_wears_headphones();
     if (failures) {
         fprintf(stderr, "%d check(s) failed\n", failures);
         return 1;
