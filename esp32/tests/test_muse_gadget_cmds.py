@@ -184,17 +184,46 @@ class MuseGadgetCmdsSourceTest(unittest.TestCase):
         source = SOURCE.read_text()
         add = source[source.index("void muse_gadget_add_commands("):]
         block = add[add.index("#if CONFIG_MUSE_HATCH"):]
-        self.assertIn('"media.update"', block[:block.index("#endif")])
+        block = block[:block.index("#endif")]
+        self.assertIn('"media.update"', block)
+        self.assertIn('"player_id"', block)
+        self.assertIn('"art_url"', block)
         body = source[source.index("cJSON *muse_gadget_command("):]
-        self.assertIn("now_playing_command(params)", body[:body.index("\n}\n")])
+        self.assertIn("media_command(params)", body[:body.index("\n}\n")])
+        cmake = (ROOT / "components/muse/CMakeLists.txt").read_text()
+        self.assertIn('"muse_gadget_media.c"', cmake)
         ui = (ROOT / "components/muse/muse_ui.c").read_text()
-        # LVGL's tile indexes are uint8_t: Now Playing is column 0, the face 1.
-        self.assertIn("s_np = lv_tileview_add_tile(s_tv, 0, 0, LV_DIR_RIGHT)", ui)
-        self.assertIn("s_face = lv_tileview_add_tile(s_tv, 1, 0,", ui)
-        self.assertIn("lv_tileview_set_tile(s_tv, s_face, LV_ANIM_OFF)", ui)
+        # The tile's code lives in muse_gadget_media.c; muse_ui.c keeps hooks.
+        self.assertNotIn("muse_ui_now_playing", ui)
+        self.assertNotIn("np_apply_pending", ui)
+        self.assertIn('#include "muse_gadget_media.h"', ui)
+        self.assertIn("muse_media_build(s_np, s_w, s_h);", ui)
+        self.assertIn("muse_media_frame();", ui)
+        # LVGL's tile indexes are uint8_t: Now Playing is column 0, the face after it.
+        self.assertIn("s_np = lv_tileview_add_tile(s_tv, 0, 0, LV_DIR_RIGHT);", ui)
+        self.assertIn("s_face = lv_tileview_add_tile(s_tv, NP_TILE, 0,", ui)
+        self.assertIn("lv_tileview_set_tile(s_tv, s_face, LV_ANIM_OFF);", ui)
         self.assertNotIn("lv_tileview_add_tile(s_tv, -1,", ui)
-        self.assertIn("void muse_ui_now_playing(", ui)
-        self.assertIn("static lv_obj_t *s_dots[3];", ui)
+        self.assertIn("static lv_obj_t *s_dots[2 + NP_TILE];", ui)
+        # With the face in column 1, "scrolled" means away from the face's x, not from 0:
+        # comparing with 0 froze the avatar (it only drew mid-swipe) and kept settings ticking.
+        self.assertIn("muse_settings_ui_tick(lv_obj_get_scroll_x(s_tv) > lv_obj_get_x(s_face));", ui)
+        self.assertIn("if (s_tv && lv_obj_get_scroll_x(s_tv) != lv_obj_get_x(s_face)) {", ui)
+        self.assertNotRegex(ui, r"lv_obj_get_scroll_x\(s_tv\) (!=|>|==) 0\b")
+        media = (ROOT / "components/muse/muse_gadget_media.c").read_text()
+        press = media[media.index("static void press("):]
+        press = press[:press.index("\n}\n")]
+        self.assertIn("muse_hatch_ready()", press)          # Review Focus 3
+        self.assertIn("busy_mode()", press)
+        self.assertIn("muse_hatch_quiet_turn(msg)", press)
+        self.assertIn("if (s_pending)", press)
+        # Joshua's idle: the last track and cover stay, the buttons grey out and
+        # don't respond, and "Tap to update" shows (big and centred with no track).
+        self.assertIn('"Tap to update"', media)
+        update = media[media.index("muse_np_art_t muse_media_update("):]
+        self.assertNotIn("idle", update[:update.index("\n}\n")])
+        button = media[media.index("static void on_button("):]
+        self.assertIn("idle()", button[:button.index("\n}\n")])
 
     def test_buttons_draw_showable_text_and_send_the_original(self):
         # Review fix: unscii-16 has no curly quotes; a tap still sends Muse its own words.

@@ -26,6 +26,7 @@
  *   audio.chime      play a built-in chime
  *                    (all three queued for muse_gadget_play.c)
  *   display.options  reply buttons after the spoken reply (muse_gadget_options.c)
+ *   media.update     the Now Playing tile's track and cover (muse_gadget_media.c)
  * skills/gadget-muse-s318/SKILL.md tells Muse when to use each.
  *
  * Everything from "Pure (host-tested)" to "Device" builds on the host
@@ -908,6 +909,7 @@ static cJSON *media_result(muse_np_art_t art)
 #include "freertos/idf_additions.h"
 #include "freertos/task.h"
 #if CONFIG_MUSE_HATCH
+#include "muse_gadget_media.h"
 #include "muse_gadget_options.h"
 #include "muse_gadget_play.h"
 #include "muse_tts_elevenlabs.h"
@@ -916,7 +918,6 @@ static cJSON *media_result(muse_np_art_t art)
 #include "muse_gadget_react.h"
 #include "muse_settings.h"
 #include "muse_state.h"
-#include "muse_ui.h"
 
 static const char *TAG = "muse_gadget";
 
@@ -1123,25 +1124,15 @@ static cJSON *options_command(const cJSON *params)
     return options_result(n);
 }
 
-/* media.update: optional strings player, title, artist, album, state.
- * A missing field leaves that tile field unchanged. */
-static cJSON *now_playing_command(const cJSON *params)
+/* media.update: the tile's text at once, its cover in the background. */
+static cJSON *media_command(const cJSON *params)
 {
-    static const char *const fields[5] = {"player", "title", "artist", "album", "state"};
-    const char *vals[5] = {NULL, NULL, NULL, NULL, NULL};
-    if (cJSON_IsObject(params)) {
-        for (int i = 0; i < 5; i++) {
-            const cJSON *v = cJSON_GetObjectItemCaseSensitive(params, fields[i]);
-            if (v && !cJSON_IsString(v)) {
-                return gadget_error("invalid_params", "every media.update field must be a string");
-            }
-            vals[i] = v ? v->valuestring : NULL;
-        }
+    muse_np_fields_t f;
+    char err[160];
+    if (!parse_media(params, &f, err, sizeof(err))) {
+        return gadget_error("invalid_params", err);
     }
-    muse_ui_now_playing(vals[0], vals[1], vals[2], vals[3], vals[4]);
-    cJSON *payload;
-    cJSON *result = gadget_ok(&payload);
-    return result;
+    return media_result(muse_media_update(&f));
 }
 #endif
 
@@ -1216,8 +1207,10 @@ void muse_gadget_add_commands(cJSON *commands)
     cJSON_AddItemToObject(mopt, "artist", param("string", "Artist name."));
     cJSON_AddItemToObject(mopt, "album", param("string", "Album name."));
     cJSON_AddItemToObject(mopt, "state", param("string", "playing, paused or idle."));
+    cJSON_AddItemToObject(mopt, "player_id", param("string", "Music Assistant player id; presses send it back."));
+    cJSON_AddItemToObject(mopt, "art_url", param("string", "Cover JPEG, http(s); empty clears."));
     add_command(commands, "media.update",
-                "Update the Now Playing tile (swipe right from the avatar).",
+                "Update the Now Playing tile (left of the avatar). Its presses come back as messages.",
                 NULL, mopt);
 #endif
 }
@@ -1242,7 +1235,7 @@ cJSON *muse_gadget_command(const char *command, cJSON *params, const char *reque
         return options_command(params);
     }
     if (!strcmp(command, "media.update")) {
-        return now_playing_command(params);
+        return media_command(params);
     }
 #else
     (void)request_id;

@@ -46,7 +46,8 @@ if(CONFIG_MUSE_ENABLED)
         "muse_gadget_react.c"   # nor does this
         "muse_gadget_play.c"    # nor this without CONFIG_MUSE_HATCH as well
         "muse_gadget_options.c"    # nor this
-        "muse_gadget_art.c")       # nor this
+        "muse_gadget_art.c"        # nor this
+        "muse_gadget_media.c")     # nor this
     if(CONFIG_MUSE_HATCH)
         list(APPEND srcs "muse_chat.c" "muse_account_api.c" "muse_chat_session.cpp" "muse_tts_elevenlabs.c")
         list(APPEND embed "test_reply.mp3")   # muse_hatch_mp3_selftest

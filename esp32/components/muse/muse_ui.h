@@ -47,14 +47,6 @@ void muse_ui_preview_brightness(int pct);
 bool muse_ui_image_size(int *w, int *h);
 bool muse_ui_image_draw(int x, int y, int w, int h, const uint16_t *pixels);
 void muse_ui_image_hide(void);
-/*
- * Now Playing tile, from any task. Updates what's shown on the tile left
- * of the face; any NULL argument leaves that field unchanged. The labels are
- * refreshed by the LVGL task on the next frame.
- */
-void muse_ui_now_playing(const char *player, const char *title,
-                         const char *artist, const char *album,
-                         const char *state);
 /* Watcher camera mode: shows an on-screen shutter hint over the live image. */
 void muse_ui_camera_hint(bool visible);
 
