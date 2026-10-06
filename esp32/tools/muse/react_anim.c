@@ -92,7 +92,8 @@ static void play(const char *dir, const anim_t *an, float base)
         if (an->reaction) {
             p.reaction = an->reaction;
             p.react_t = rt - REACT_AT;
-            p.react_amount = muse_reaction_amount(rt - REACT_AT, REACT_SECS);
+            p.react_amount = muse_reaction_amount(
+                rt - REACT_AT, an->reaction >= MUSE_REACT_COUNT ? muse_act_secs(an->reaction) : REACT_SECS);
         }
         muse_pixel_render(&p);
         if (i < 0) {
@@ -130,6 +131,13 @@ int main(int argc, char **argv)
     float secs = REACT_AT + REACT_SECS + 0.4f;   /* in, held, out, and a moment after */
     for (int r = 1; r < MUSE_REACT_COUNT; r++, base += 100) {
         anim_t an = { MUSE_REACTION_NAMES[r], MUSE_MODE_IDLE, secs, 5, .reaction = r };
+        play(dir, &an, base);
+    }
+    /* The gadget's own scenes, each its length (the dance's first 4 s). */
+    for (int r = MUSE_REACT_COUNT; r < MUSE_ANIM_COUNT; r++, base += 100) {
+        float len = r == MUSE_ACT_DANCE ? 4.0f : muse_act_secs(r);
+        anim_t an = { muse_anim_name(r), MUSE_MODE_IDLE, REACT_AT + len + 0.4f, 5,
+                      .reaction = r };
         play(dir, &an, base);
     }
     static const int BLENDS[] = { MUSE_REACT_LOVE, MUSE_REACT_RAINY, MUSE_REACT_SAD, MUSE_REACT_SUNNY };

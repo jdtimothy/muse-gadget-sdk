@@ -32,6 +32,7 @@ import zlib
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 FRAME_MS = 40
 REFERENCE = ["idle", "listening", "thinking", "speaking", "happy", "error"]
+SCENES = ["dance", "stretch", "hum", "butterfly", "doze", "pace"]
 
 
 def png(path, width, height, rows):
@@ -109,7 +110,10 @@ figcaption {{ margin-top: 6px; font-size: 14px; text-align: center; }}
 </style>
 <main>
 <h1>Muse reactions</h1>
-<p>Drawn by the gadget's own renderer on its 64 by 64 grid, 25 frames a second, at the full-size avatar's scale. Each reaction comes in, holds 4 s and eases out.</p>
+<p>Drawn by the gadget's own renderer on its 64 by 64 grid, 25 frames a second, at the full-size avatar's scale. Each reaction comes in, holds 4 s and eases out. The gadget's own scenes play their own length; the dance shows its first 4 s of 30.</p>
+<h2>The gadget's own scenes</h2>
+<p>The dance, for 30 s after a media event, and the idle scenes, one every 10-30 s while nothing is happening.</p>
+<div class="grid">{scenes}</div>
 <h2>The avatar today</h2>
 <p>For comparison: what reactions should feel like they belong with.</p>
 <div class="grid">{reference}</div>
@@ -136,11 +140,13 @@ def main():
     by = {a[0]: a for a in anims}
     reference = "".join(tile(*by[n]) for n in REFERENCE)
     blend = ("speaking-", "thinking-")
-    reactions = "".join(tile(*a) for a in anims if a[0] not in REFERENCE and not a[0].startswith(blend))
+    scenes = "".join(tile(*by[n]) for n in SCENES if n in by)
+    reactions = "".join(tile(*a) for a in anims
+                        if a[0] not in REFERENCE and a[0] not in SCENES and not a[0].startswith(blend))
     blends = "".join(tile(*a) for a in anims if a[0].startswith("speaking-"))
     thinks = "".join(tile(*a) for a in anims if a[0].startswith("thinking-"))
     with open(os.path.join(out, "gallery.html"), "w", encoding="utf-8") as f:
-        f.write(PAGE.format(reference=reference, reactions=reactions, blends=blends, thinks=thinks))
+        f.write(PAGE.format(scenes=scenes, reference=reference, reactions=reactions, blends=blends, thinks=thinks))
     print(os.path.join(out, "gallery.html"))
     for name, frames, _ in anims:
         print(f"{name}.png  ({frames} frames)")
