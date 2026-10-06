@@ -3,11 +3,12 @@ name: gadget-muse-s318
 description: >-
   Use the user's Muse Gadget, a desk companion on a Waveshare ESP32-S3 1.8" AMOLED
   running the Muse Gadget SDK: read or change its volume, mute, brightness and screen
-  sleep, report its battery, switch the voice it speaks in, show reactions on its avatar, offer reply buttons on its screen, make it say things aloud,
+  sleep, report its battery, switch the voice it speaks in, show reactions on its avatar, offer reply buttons on its screen, show what's playing with cover art, make it say things aloud,
   play sound clips and chimes, show a picture on its screen, and scan the home
   network through it. Also use it for every push-to-talk voice note from the
-  gadget (a message with no text and one attachment named voice_note.wav) and
-  every message ending in [tapped on the gadget].
+  gadget (a message with no text and one attachment named voice_note.wav),
+  every message ending in [tapped on the gadget], and every message containing
+  [pressed on the gadget's Now Playing tile.
 ---
 
 # Muse Gadget (s318)
@@ -24,6 +25,11 @@ A push-to-talk voice note from the gadget reaches you as a message with no text
 and one audio attachment named `voice_note.wav`. Treat every such message as the
 user talking to you through the gadget, even when they don't mention it: your
 reply will be spoken by the gadget in its voice, with its avatar on screen.
+
+A message like `next [pressed on the gadget's Now Playing tile; player_id: …]`
+is the user pressing a button on the Now Playing tile, or tapping the tile to
+refresh it. It is not a conversation turn: follow "Now Playing presses" below,
+and reply with only `ok`. Nothing you write on that turn is spoken or shown.
 
 A message ending in `[tapped on the gadget]` is the user tapping one of the
 reply buttons you offered with `display.options`: the words before the tag are
@@ -177,14 +183,41 @@ optional strings; a missing one leaves that field unchanged.
 | `title` | Track title |
 | `artist` | Artist name |
 | `album` | Album name |
-| `state` | `playing`, `paused` or `idle` |
+| `state` | `playing`, `paused` or `idle` (idle greys out the buttons and shows "Tap to update") |
+| `player_id` | The bridge's `player_id` for that player. The tile sends it back with every press |
+| `art_url` | The cover: the bridge's `image`, exactly as it gives it. Empty clears it |
 
-- Call it when the music changes — after you poll the Music Assistant bridge
-  (`ma.now_playing`) and the track, player or state differs from what the tile
-  last showed. A poll loop every 30-60 s keeps it fresh.
-- When nothing is playing anywhere, send `title` as empty and `state` as
-  `idle`; the tile shows "Nothing playing".
+- Fill it from the NAS bridge: `ma.now_playing` (or `ma.control`'s answer)
+  gives `name`, `title`, `artist`, `album`, `state`, `player_id` and `image`.
+  Send `image` unchanged as `art_url`: Music Assistant only serves its own sizes.
+- Don't poll. Call it after a Now Playing press, or when the user asks about
+  the music or asks you to play, pause or skip.
+- When nothing is playing anywhere, send only `state` as `idle`. The tile keeps
+  the last track and cover, greys out its buttons and shows "Tap to update".
+- It answers `{"art": "loading" | "unchanged" | "cleared" | "none"}`. The cover
+  loads in the background; there's nothing to wait for.
 - Don't call it just to test it.
+
+### Now Playing presses
+
+The tile has back, play/pause and skip buttons, and a tap anywhere else on it
+asks for a refresh. Each arrives as a message:
+
+`<action> [pressed on the gadget's Now Playing tile; player_id: <id>]`
+
+(without `; player_id: <id>` if the tile hasn't been sent one yet).
+
+1. For `play_pause`, `next` or `previous`: call the bridge's `ma.control` with
+   that `player_id` and `action`. It answers with that player's now-playing.
+2. For `refresh`: call `ma.now_playing` with that `player_id`. With no id,
+   call it with none and pick the player that's playing, else the first paused
+   one; if none is either, send only `state` as `idle`.
+3. Then call `media.update` on the gadget with the result, `player_id` and
+   `art_url` included.
+4. Reply with only `ok`. Nothing is spoken.
+5. If the bridge fails, call `voice.say` with a few words ("The Kitchen speaker
+   isn't responding"), then still call `media.update` with what you know, so the
+   gadget stops waiting.
 
 ### device.health
 
