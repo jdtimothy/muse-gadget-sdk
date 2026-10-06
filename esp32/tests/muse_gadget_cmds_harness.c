@@ -26,6 +26,7 @@
 #include "muse_gadget_sound.h"
 #include "muse_reactions.h"
 #include "muse_reply_options.h"
+#include "muse_now_playing.h"
 #include "gadget_pure.inc"
 
 static int failures;
@@ -664,6 +665,85 @@ static void test_options_message(void)
     cJSON_Delete(r);
 }
 
+static void test_np_message(void)
+{
+    char out[MUSE_NP_MSG_MAX];
+    muse_np_message(out, sizeof(out), MUSE_NP_NEXT, "ap1234");
+    CHECK(!strcmp(out, "next [pressed on the gadget's Now Playing tile; player_id: ap1234]"));
+    /* Review Focus 1: no player id stored yet (an older skill sends none). */
+    muse_np_message(out, sizeof(out), MUSE_NP_REFRESH, NULL);
+    CHECK(!strcmp(out, "refresh [pressed on the gadget's Now Playing tile]"));
+    muse_np_message(out, sizeof(out), MUSE_NP_PLAY_PAUSE, "");
+    CHECK(!strcmp(out, "play_pause [pressed on the gadget's Now Playing tile]"));
+    /* The longest id still fits whole. */
+    char id[MUSE_NP_PLAYER_ID_MAX + 1];
+    memset(id, 'x', MUSE_NP_PLAYER_ID_MAX);
+    id[MUSE_NP_PLAYER_ID_MAX] = '\0';
+    muse_np_message(out, sizeof(out), MUSE_NP_PLAY_PAUSE, id);
+    CHECK(strlen(out) == strlen("play_pause") + strlen(MUSE_NP_TAG) + strlen("; player_id: ") + MUSE_NP_PLAYER_ID_MAX + 1);
+    CHECK(out[strlen(out) - 1] == ']');
+    CHECK(!strcmp(muse_np_action_name(MUSE_NP_PREVIOUS), "previous"));
+    CHECK(!strcmp(muse_np_art_name(MUSE_NP_ART_UNCHANGED), "unchanged"));
+}
+
+static void test_np_art_scale(void)
+{
+    CHECK(muse_np_art_scale(448, 448, 368, 448) == 0);
+    CHECK(muse_np_art_scale(1000, 1000, 368, 448) == 1);   /* 500 still covers, 250 doesn't */
+    CHECK(muse_np_art_scale(1800, 1800, 368, 448) == 2);   /* 450 */
+    CHECK(muse_np_art_scale(4000, 4000, 368, 448) == 3);   /* 500 at 1/8, the decoder's smallest */
+    CHECK(muse_np_art_scale(300, 300, 368, 448) == 0);     /* too small: scaled up after */
+    CHECK(muse_np_art_scale(1500, 600, 368, 448) == 0);    /* halving loses the height */
+}
+
+/* The decoded pixel the tile's (x, y) shows. */
+static int fit_x(muse_np_fit_t f, int x)
+{
+    return (int)((f.ox + (uint32_t)x * f.step) >> 16);
+}
+
+static int fit_y(muse_np_fit_t f, int y)
+{
+    return (int)((f.oy + (uint32_t)y * f.step) >> 16);
+}
+
+static void test_np_art_fit(void)
+{
+    /* A 448 square on the 368x448 tile: 1:1, cropped 40 px each side. */
+    muse_np_fit_t f = muse_np_art_fit(448, 448, 368, 448);
+    CHECK(f.step == 65536 && fit_x(f, 0) == 40 && fit_x(f, 367) == 407 && fit_y(f, 0) == 0 && fit_y(f, 447) == 447);
+    /* 500x500 (a 1000 px cover at 1/2): cropped on both axes, centred. */
+    f = muse_np_art_fit(500, 500, 368, 448);
+    CHECK(f.step == 65536 && fit_x(f, 0) == 66 && fit_y(f, 0) == 26);
+    /* A 300 square: scaled up to fill the height, cropped at the sides. */
+    f = muse_np_art_fit(300, 300, 368, 448);
+    CHECK(f.step < 65536 && fit_y(f, 0) == 0 && fit_y(f, 447) == 299);
+    CHECK(fit_x(f, 0) == 26 && fit_x(f, 367) == 272);
+    /* Review Focus 4: never past the decoded image's edge, whatever its size. */
+    static const int sizes[][2] = { { 1, 1 }, { 368, 448 }, { 369, 449 }, { 640, 360 },
+                                    { 4096, 4096 }, { 4096, 1 }, { 1, 4096 } };
+    for (size_t i = 0; i < sizeof(sizes) / sizeof(sizes[0]); i++) {
+        f = muse_np_art_fit(sizes[i][0], sizes[i][1], 368, 448);
+        CHECK(fit_x(f, 367) < sizes[i][0] && fit_y(f, 447) < sizes[i][1]);
+    }
+}
+
+static void test_np_dim(void)
+{
+    CHECK(muse_np_dim(0, 448) == 128);     /* 50% at the top */
+    CHECK(muse_np_dim(179, 448) == 128);   /* until 40% of the way down */
+    CHECK(muse_np_dim(447, 448) == 64);    /* 25% at the bottom */
+    CHECK(muse_np_dim(313, 448) > 64 && muse_np_dim(313, 448) < 128);
+    for (int y = 1; y < 448; y++) {
+        CHECK(muse_np_dim(y, 448) <= muse_np_dim(y - 1, 448));   /* never brighter going down */
+    }
+    CHECK(muse_np_rgb565(255, 255, 255) == 0xFFFF);
+    CHECK(muse_np_rgb565(255, 0, 0) == 0xF800 && muse_np_rgb565(0, 0, 255) == 0x001F);
+    CHECK(muse_np_dim565(0xFFFF, 256) == 0xFFFF);
+    CHECK(muse_np_dim565(0xFFFF, 128) == (uint16_t)((15 << 11) | (31 << 5) | 15));
+    CHECK(muse_np_dim565(0xF800, 0) == 0);
+}
+
 int main(void)
 {
     test_parse_settings();
@@ -690,6 +770,10 @@ int main(void)
     test_parse_options();
     test_options_step();
     test_options_message();
+    test_np_message();
+    test_np_art_scale();
+    test_np_art_fit();
+    test_np_dim();
     if (failures) {
         fprintf(stderr, "%d check(s) failed\n", failures);
         return 1;
