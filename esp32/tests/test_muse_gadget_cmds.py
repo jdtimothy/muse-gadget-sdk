@@ -227,6 +227,22 @@ class MuseGadgetCmdsSourceTest(unittest.TestCase):
         self.assertIn('send_chat(message, "text")', tap)
         self.assertIn("if (!s_turn.tap) {", session)          # no "note sent" caption for a tap
 
+    def test_art_is_built_and_logs_no_urls(self):
+        cmake = (ROOT / "components/muse/CMakeLists.txt").read_text()
+        self.assertIn('"muse_gadget_art.c"', cmake)
+        art = (ROOT / "components/muse/muse_gadget_art.c").read_text()
+        self.assertIn("#if CONFIG_MUSE_GADGET_COMMANDS && CONFIG_MUSE_HATCH", art)
+        self.assertIn("muse_tts_google_roots()", art)        # as clips: GTS cross-signed roots
+        self.assertIn("rom/tjpgd.h", art)
+        for call in re.findall(r"ESP_LOG\w\(.*?\);", art, re.S):
+            self.assertNotIn("url", call.split(",", 1)[-1], call)   # the host only, never the URL
+        # Review Focus 4: the buffer to fill is chosen, and a finished one handed over, under the lock.
+        decode = art[art.index("static void decode("):]
+        decode = decode[:decode.index("\n}\n")]
+        self.assertRegex(decode, r"taskENTER_CRITICAL\(&s_lock\);\s*\n\s*int back = s_front == 0 \? 1 : 0;")
+        take = art[art.index("const uint16_t *muse_art_take("):]
+        self.assertIn("taskENTER_CRITICAL(&s_lock);", take[:take.index("\n}\n")])
+
     def test_quiet_turn_in_the_chat_session(self):
         # Review Focus 3: a Now Playing press is a typed turn that reports nowhere.
         chat_h = (ROOT / "components/muse/muse_chat.h").read_text()
