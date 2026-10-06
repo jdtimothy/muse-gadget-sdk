@@ -17,9 +17,17 @@
 #pragma once
 
 /*
- * The avatar's current reaction (avatar.react, CONFIG_MUSE_GADGET_COMMANDS):
- * set by the command, read by the UI for each frame (muse_ui.c).
+ * The avatar's current reaction (avatar.react) or built-in scene (the idle
+ * picker, the dance), CONFIG_MUSE_GADGET_COMMANDS: set by the command and
+ * media events, read by the UI for each frame (muse_ui.c), which also runs
+ * the idle picker.
  */
+
+#include <stdbool.h>
+
+/* A media event (muse_gadget_media.c): a playing update or a button press
+ * starts (or extends) 30 s of dancing; paused or idle stops it. Any task. */
+void muse_react_media(const char *state, bool press);
 
 /* Shows reaction `id` (muse_reactions.h) for `seconds`, waking the screen;
  * MUSE_REACT_NONE clears. Any task. */

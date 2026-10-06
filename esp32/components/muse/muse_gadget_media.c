@@ -30,6 +30,7 @@
 
 #include "muse_chat.h"
 #include "muse_gadget_art.h"
+#include "muse_gadget_react.h"
 #include "muse_state.h"
 #include "muse_text.h"
 
@@ -143,6 +144,7 @@ muse_np_art_t muse_media_update(const muse_np_fields_t *f)
     if (fetch || stop) {
         muse_art_fetch(fetch ? url : NULL);
     }
+    muse_react_media(f->state, false);   /* the dance starts, stops or carries on */
     return art;
 }
 
@@ -237,6 +239,9 @@ static void press(muse_np_action_t a, int btn)
         return;
     }
     ESP_LOGI(TAG, "pressed %s", muse_np_action_name(a));
+    if (a != MUSE_NP_REFRESH) {
+        muse_react_media(NULL, true);   /* back, play/pause, skip: dance */
+    }
     s_pending = true;
     s_pending_updates = updates;
     s_pending_until_us = esp_timer_get_time() + WAIT_US;

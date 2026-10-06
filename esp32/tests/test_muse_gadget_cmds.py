@@ -295,6 +295,29 @@ class MuseGadgetCmdsSourceTest(unittest.TestCase):
         take = art[art.index("const uint16_t *muse_art_take("):]
         self.assertIn("taskENTER_CRITICAL(&s_lock);", take[:take.index("\n}\n")])
 
+    def test_idle_scenes_and_dance_are_run(self):
+        react = (ROOT / "components/muse/muse_gadget_react.c").read_text()
+        pose = react[react.index("int muse_react_pose("):]
+        self.assertIn("idle_frame();", pose[:pose.index("\n}\n")])
+        frame = react[react.index("static void idle_frame("):]
+        frame = frame[:frame.index("\n}\n")]
+        self.assertIn("muse_idle_step(", frame)
+        self.assertIn("muse_idle_doze_after(muse_settings_sleep_s())", frame)
+        self.assertIn("muse_options_showing()", frame)                 # Review Focus 4
+        self.assertIn("muse_state_happiness()", frame)
+        self.assertIn("now - s_last_frame", frame)                     # Review Focus 2
+        dance = react[react.index("static void start_dance("):]
+        dance = dance[:dance.index("\n}\n")]
+        self.assertNotIn("s_start_us = ", dance)          # Review Focus 3: dancing, it only extends
+        self.assertIn("s_secs = elapsed + secs;", dance)
+        h = (ROOT / "components/muse/muse_gadget_react.h").read_text()
+        self.assertIn("void muse_react_media(const char *state, bool press);", h)
+        media = (ROOT / "components/muse/muse_gadget_media.c").read_text()
+        update = media[media.index("muse_np_art_t muse_media_update("):]
+        self.assertIn("muse_react_media(f->state, false);", update[:update.index("\n}\n")])
+        press = media[media.index("static void press("):]
+        self.assertIn("muse_react_media(NULL, true);", press[:press.index("\n}\n")])
+
     def test_quiet_turn_in_the_chat_session(self):
         # Review Focus 3: a Now Playing press is a typed turn that reports nowhere.
         chat_h = (ROOT / "components/muse/muse_chat.h").read_text()
