@@ -188,7 +188,11 @@ class MuseGadgetCmdsSourceTest(unittest.TestCase):
         body = source[source.index("cJSON *muse_gadget_command("):]
         self.assertIn("now_playing_command(params)", body[:body.index("\n}\n")])
         ui = (ROOT / "components/muse/muse_ui.c").read_text()
-        self.assertIn("lv_tileview_add_tile(s_tv, -1, 0, LV_DIR_RIGHT)", ui)
+        # LVGL's tile indexes are uint8_t: Now Playing is column 0, the face 1.
+        self.assertIn("s_np = lv_tileview_add_tile(s_tv, 0, 0, LV_DIR_RIGHT)", ui)
+        self.assertIn("s_face = lv_tileview_add_tile(s_tv, 1, 0,", ui)
+        self.assertIn("lv_tileview_set_tile(s_tv, s_face, LV_ANIM_OFF)", ui)
+        self.assertNotIn("lv_tileview_add_tile(s_tv, -1,", ui)
         self.assertIn("void muse_ui_now_playing(", ui)
         self.assertIn("static lv_obj_t *s_dots[3];", ui)
 

@@ -100,7 +100,7 @@ static lv_obj_t *s_tv;
 static lv_obj_t *s_face;
 static lv_obj_t *s_settings;
 static lv_obj_t *s_dots[3];
-static lv_obj_t *s_np;         /* now-playing tile, at (-1, 0) */
+static lv_obj_t *s_np;         /* now-playing tile, at (0, 0), left of the face */
 static lv_obj_t *s_np_player;  /* label: which player */
 static lv_obj_t *s_np_title;   /* label: track title */
 static lv_obj_t *s_np_artist;  /* label: artist — album */
@@ -943,7 +943,12 @@ static void build_screen(void)
         lv_obj_set_style_bg_color(s_tv, lv_color_black(), 0);
         lv_obj_set_style_bg_opa(s_tv, LV_OPA_COVER, 0);
         lv_obj_set_scrollbar_mode(s_tv, LV_SCROLLBAR_MODE_OFF);
-        s_face = lv_tileview_add_tile(s_tv, 0, 0, LV_DIR_LEFT | LV_DIR_RIGHT);
+        /* Now Playing: swipe right from the face. LVGL's tile indexes are
+         * unsigned, so it is column 0 and the face, column 1, is shown first. */
+        s_np = lv_tileview_add_tile(s_tv, 0, 0, LV_DIR_RIGHT);
+        lv_obj_set_scrollbar_mode(s_np, LV_SCROLLBAR_MODE_OFF);
+        build_np(s_np);
+        s_face = lv_tileview_add_tile(s_tv, 1, 0, LV_DIR_LEFT | LV_DIR_RIGHT);
         /* It never scrolls, but LVGL would size its scrollbars from all its
          * children every time it draws any part of it. */
         lv_obj_set_scrollbar_mode(s_face, LV_SCROLLBAR_MODE_OFF);
@@ -951,11 +956,9 @@ static void build_screen(void)
          * shows as a different-coloured square around the character. */
         lv_obj_set_style_bg_color(s_face, lv_color_black(), 0);
         lv_obj_set_style_bg_opa(s_face, LV_OPA_COVER, 0);
-        s_settings = lv_tileview_add_tile(s_tv, 1, 0, LV_DIR_LEFT);
-        /* Now Playing: swipe right from the face. */
-        s_np = lv_tileview_add_tile(s_tv, -1, 0, LV_DIR_RIGHT);
-        lv_obj_set_scrollbar_mode(s_np, LV_SCROLLBAR_MODE_OFF);
-        build_np(s_np);
+        s_settings = lv_tileview_add_tile(s_tv, 2, 0, LV_DIR_LEFT);
+        lv_obj_update_layout(s_tv);
+        lv_tileview_set_tile(s_tv, s_face, LV_ANIM_OFF);
         face = s_face;
     }
 
