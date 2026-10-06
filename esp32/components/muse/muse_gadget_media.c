@@ -73,7 +73,6 @@ typedef struct {
     char album[NP_FIELD_MAX];
     char state[NP_STATE_MAX];
     char player_id[MUSE_NP_PLAYER_ID_MAX + 1];
-    char art_url[MUSE_NP_ART_URL_MAX + 1];
     bool dirty;
     bool art_clear;
     uint32_t updates;                  /* bumped by each media.update: ends a press's wait */
@@ -115,6 +114,9 @@ muse_np_art_t muse_media_update(const muse_np_fields_t *f)
     muse_np_art_t art = MUSE_NP_ART_NONE;
     const char *url = f->art_url;
     bool fetch = false, stop = false;
+    /* Showing, queued or downloading: nothing to do. A cover that failed isn't,
+     * so the next update (a tap to refresh, say) tries it again. */
+    bool has = url && url[0] && muse_art_has(url);
     taskENTER_CRITICAL(&s_lock);
     const char *fields[] = { f->player, f->title, f->artist, f->album, f->state, f->player_id };
     char *slots[] = { s_data.player, s_data.title, s_data.artist, s_data.album, s_data.state, s_data.player_id };
@@ -127,13 +129,11 @@ muse_np_art_t muse_media_update(const muse_np_fields_t *f)
     }
     if (url && !url[0]) {
         art = MUSE_NP_ART_CLEARED;
-        s_data.art_url[0] = '\0';
         s_data.art_clear = true;
         stop = true;
-    } else if (url && !strcmp(url, s_data.art_url)) {
+    } else if (has) {
         art = MUSE_NP_ART_UNCHANGED;
     } else if (url) {
-        copy_field(s_data.art_url, sizeof(s_data.art_url), url);
         art = MUSE_NP_ART_LOADING;
         fetch = true;
     }
@@ -270,6 +270,16 @@ static void on_button(lv_event_t *e)
 static void on_tile(lv_event_t *e)
 {
     (void)e;
+    lv_point_t p;
+    lv_area_t tile;
+    lv_indev_get_point(lv_indev_active(), &p);
+    lv_obj_get_coords(s_tile, &tile);
+    int y = p.y - tile.y1;
+    if (!muse_np_tap_refreshes(y, s_h)) {
+        ESP_LOGI(TAG, "tap at %d,%d: the buttons' row, no refresh", (int)(p.x - tile.x1), y);
+        return;
+    }
+    ESP_LOGI(TAG, "tap at %d,%d", (int)(p.x - tile.x1), y);
     press(MUSE_NP_REFRESH, -1);   /* a tap on the art or blank space */
 }
 
@@ -282,6 +292,21 @@ static lv_obj_t *make_label(const lv_font_t *font, uint32_t color)
     lv_obj_remove_flag(l, LV_OBJ_FLAG_CLICKABLE);   /* taps go to the tile */
     lv_label_set_text(l, "");
     return l;
+}
+
+/* Button b's third of the lower third, invisible: on the board, touches near
+ * the bottom read 20-55 px below where they land, so taps on the buttons
+ * themselves often missed. The buttons sit on top and take their own taps. */
+static void make_zone(int b)
+{
+    int top = s_h * 2 / 3;
+    lv_obj_t *z = lv_obj_create(s_tile);
+    lv_obj_remove_style_all(z);
+    lv_obj_set_pos(z, b * s_w / B_COUNT, top);
+    lv_obj_set_size(z, (b + 1) * s_w / B_COUNT - b * s_w / B_COUNT, s_h - top);
+    lv_obj_remove_flag(z, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(z, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(z, on_button, LV_EVENT_CLICKED, (void *)(intptr_t)b);
 }
 
 static void make_button(int b, int size, int dx, const char *symbol)
@@ -353,6 +378,9 @@ void muse_media_build(lv_obj_t *tile, int w, int h)
     lv_obj_align(s_status, LV_ALIGN_BOTTOM_MID, 0, -STATUS_BOTTOM);
     lv_obj_add_flag(s_status, LV_OBJ_FLAG_HIDDEN);
 
+    for (int b = 0; b < B_COUNT; b++) {
+        make_zone(b);
+    }
     make_button(B_PREVIOUS, BTN_SMALL, -BTN_DX, LV_SYMBOL_PREV);
     make_button(B_PLAY, BTN_BIG, 0, LV_SYMBOL_PLAY);
     make_button(B_NEXT, BTN_SMALL, BTN_DX, LV_SYMBOL_NEXT);

@@ -224,6 +224,29 @@ class MuseGadgetCmdsSourceTest(unittest.TestCase):
         self.assertNotIn("idle", update[:update.index("\n}\n")])
         button = media[media.index("static void on_button("):]
         self.assertIn("idle()", button[:button.index("\n}\n")])
+        # Joshua: the lower third (the buttons' row) never refreshes; taps are logged
+        # with their point, to check the touch lines up with the buttons.
+        tile = media[media.index("static void on_tile("):]
+        tile = tile[:tile.index("\n}\n")]
+        self.assertIn("muse_np_tap_refreshes(", tile)
+        self.assertIn("ESP_LOGI(", tile)
+        # On the board, touches near the bottom read 20-55 px low, so taps on the
+        # buttons missed them: the lower third is three tap zones, one per button.
+        build = media[media.index("void muse_media_build("):]
+        build = build[:build.index("\n}\n")]
+        self.assertIn("make_zone(", build)
+        zone = media[media.index("static void make_zone("):]
+        zone = zone[:zone.index("\n}\n")]
+        self.assertIn("lv_obj_add_event_cb(z, on_button, LV_EVENT_CLICKED", zone)
+        self.assertIn("LV_OBJ_FLAG_CLICKABLE", zone)
+        self.assertLess(build.index("make_zone("), build.index("make_button("))   # buttons stay on top
+        # Review fix: a cover that failed is fetched again; "unchanged" only means
+        # it's showing or on its way.
+        self.assertIn("muse_art_has(", update[:update.index("\n}\n")])
+        self.assertNotIn("!strcmp(url, s_data.art_url)", media)
+        art = (ROOT / "components/muse/muse_gadget_art.c").read_text()
+        has = art[art.index("bool muse_art_has("):]
+        self.assertIn("taskENTER_CRITICAL(&s_lock);", has[:has.index("\n}\n")])
 
     def test_buttons_draw_showable_text_and_send_the_original(self):
         # Review fix: unscii-16 has no curly quotes; a tap still sends Muse its own words.

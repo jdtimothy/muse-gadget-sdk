@@ -712,9 +712,13 @@ static void test_np_art_fit(void)
     /* A 448 square on the 368x448 tile: 1:1, cropped 40 px each side. */
     muse_np_fit_t f = muse_np_art_fit(448, 448, 368, 448);
     CHECK(f.step == 65536 && fit_x(f, 0) == 40 && fit_x(f, 367) == 407 && fit_y(f, 0) == 0 && fit_y(f, 447) == 447);
-    /* 500x500 (a 1000 px cover at 1/2): cropped on both axes, centred. */
+    /* 500x500 (a 1000 px cover at 1/2): scaled down to the tile's height, so
+     * only the sides are cropped (review fix: 1:1 cut a quarter of a cover off). */
     f = muse_np_art_fit(500, 500, 368, 448);
-    CHECK(f.step == 65536 && fit_x(f, 0) == 66 && fit_y(f, 0) == 26);
+    CHECK(f.step > 65536 && fit_y(f, 0) == 0 && fit_y(f, 447) >= 498 && fit_x(f, 0) == 44);
+    /* Music Assistant's 512 px covers: the whole height shows, 420 of 512 across. */
+    f = muse_np_art_fit(512, 512, 368, 448);
+    CHECK(fit_y(f, 0) == 0 && fit_y(f, 447) >= 510 && fit_x(f, 0) == 45 && fit_x(f, 367) == 465);
     /* A 300 square: scaled up to fill the height, cropped at the sides. */
     f = muse_np_art_fit(300, 300, 368, 448);
     CHECK(f.step < 65536 && fit_y(f, 0) == 0 && fit_y(f, 447) == 299);
@@ -726,6 +730,17 @@ static void test_np_art_fit(void)
         f = muse_np_art_fit(sizes[i][0], sizes[i][1], 368, 448);
         CHECK(fit_x(f, 367) < sizes[i][0] && fit_y(f, 447) < sizes[i][1]);
     }
+}
+
+/* Joshua: a tap in the lower third (the buttons' row) never refreshes. */
+static void test_np_tap_refreshes(void)
+{
+    CHECK(muse_np_tap_refreshes(0, 448));
+    CHECK(muse_np_tap_refreshes(297, 448));
+    CHECK(!muse_np_tap_refreshes(299, 448));
+    CHECK(!muse_np_tap_refreshes(384, 448));   /* the buttons' centre */
+    CHECK(!muse_np_tap_refreshes(447, 448));
+    CHECK(muse_np_tap_refreshes(-1, 448) == false && !muse_np_tap_refreshes(448, 448));   /* off the tile */
 }
 
 static void test_np_dim(void)
@@ -807,6 +822,14 @@ static void test_parse_media(void)
     /* A misspelled or unknown parameter is refused, not ignored. */
     CHECK(!media("{\"title\":\"x\",\"duration\":200}", &p, &f, err) && strstr(err, "duration"));
     cJSON_Delete(p);
+    /* Review fix: the bridge gives null for what a track lacks (a radio stream's
+     * album, a local file's cover): not sent, except art_url, where null clears. */
+    CHECK(media("{\"title\":\"Radio 1\",\"artist\":null,\"album\":null,\"state\":null,\"art_url\":null}", &p, &f,
+                err) &&
+          !strcmp(f.title, "Radio 1") && !f.artist && !f.album && !f.state && f.art_url && !f.art_url[0]);
+    cJSON_Delete(p);
+    CHECK(media("{\"player_id\":null}", &p, &f, err) && !f.player_id);
+    cJSON_Delete(p);
     /* audio.play_url still takes https only. */
     gadget_sound_t s;
     CHECK(!sound("audio.play_url", "{\"url\":\"http://example.com/a.mp3\"}", &s, err));
@@ -856,6 +879,7 @@ int main(void)
     test_np_art_scale();
     test_np_art_fit();
     test_np_dim();
+    test_np_tap_refreshes();
     test_parse_media();
     test_media_result();
     if (failures) {

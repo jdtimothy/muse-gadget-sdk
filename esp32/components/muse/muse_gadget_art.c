@@ -56,6 +56,8 @@ static atomic_uint s_gen;                 /* bumped by each muse_art_fetch() */
 /* Under s_lock: the wanted cover, and which buffer is which. */
 static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
 static char *s_url;                       /* waiting for the task, or NULL */
+static const char *s_cur;                 /* the one the task is fetching, or NULL */
+static char *s_loaded;                    /* the last one decoded, or NULL */
 static int s_front = -1;                  /* the buffer the tile shows, or -1 */
 static int s_ready = -1;                  /* a finished buffer not yet taken, or -1 */
 
@@ -147,7 +149,7 @@ static void fit(const art_t *a, uint16_t *dst)
     }
 }
 
-static void decode(esp_http_client_handle_t c, const char *host, unsigned gen)
+static void decode(esp_http_client_handle_t c, const char *url, const char *host, unsigned gen)
 {
     art_t a = { .http = c, .gen = gen, .deadline_us = esp_timer_get_time() + ART_DEADLINE_US };
     void *pool = malloc(JPEG_POOL_BYTES);
@@ -191,11 +193,17 @@ static void decode(esp_http_client_handle_t c, const char *host, unsigned gen)
         s_ready = -1;   /* a cover not yet taken may be in `back`: it's dropped */
         taskEXIT_CRITICAL(&s_lock);
         fit(&a, s_buf[back]);
+        char *loaded = strdup(url), *old = NULL;
         taskENTER_CRITICAL(&s_lock);
         if (atomic_load(&s_gen) == gen) {
             s_ready = back;
+            old = s_loaded;
+            s_loaded = loaded;
+            loaded = NULL;
         }
         taskEXIT_CRITICAL(&s_lock);
+        free(old);
+        free(loaded);
         ESP_LOGI(TAG, "art from %s: %dx%d at 1/%d, %u bytes", host, (int)jd.width, (int)jd.height, 1 << s,
                  (unsigned)a.bytes);
     }
@@ -279,7 +287,7 @@ static void fetch(const char *url, unsigned gen)
     } else if (esp_http_client_get_content_length(c) > ART_MAX_BYTES) {
         ESP_LOGW(TAG, "art from %s: over 1 MB", host);
     } else {
-        decode(c, host, gen);
+        decode(c, url, host, gen);
     }
     esp_http_client_close(c);
     esp_http_client_cleanup(c);
@@ -295,11 +303,15 @@ static void art_task(void *arg)
             unsigned gen = atomic_load(&s_gen);
             char *url = s_url;
             s_url = NULL;
+            s_cur = url;
             taskEXIT_CRITICAL(&s_lock);
             if (!url) {
                 break;
             }
             fetch(url, gen);
+            taskENTER_CRITICAL(&s_lock);
+            s_cur = NULL;   /* done: decoded (s_loaded) or failed, and then fetched again if asked */
+            taskEXIT_CRITICAL(&s_lock);
             free(url);
         }
     }
@@ -337,15 +349,29 @@ void muse_art_fetch(const char *url)
         return;
     }
     taskENTER_CRITICAL(&s_lock);
-    char *old = s_url;
+    char *old = s_url, *loaded = NULL;
     s_url = copy;
     s_ready = -1;   /* a finished cover not yet shown is out of date */
+    if (!copy) {
+        loaded = s_loaded;   /* cleared: the same cover again is a new fetch */
+        s_loaded = NULL;
+    }
     atomic_fetch_add(&s_gen, 1);
     taskEXIT_CRITICAL(&s_lock);
     free(old);
+    free(loaded);
     if (s_task && copy) {
         xTaskNotifyGive(s_task);
     }
+}
+
+bool muse_art_has(const char *url)
+{
+    taskENTER_CRITICAL(&s_lock);
+    bool has = (s_url && !strcmp(s_url, url)) || (s_cur && !strcmp(s_cur, url)) ||
+               (s_loaded && !strcmp(s_loaded, url));
+    taskEXIT_CRITICAL(&s_lock);
+    return has;
 }
 
 const uint16_t *muse_art_take(void)

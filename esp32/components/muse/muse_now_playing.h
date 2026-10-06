@@ -23,6 +23,7 @@
  * tests can use it.
  */
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -47,7 +48,7 @@ typedef enum {
     MUSE_NP_ART_NONE,        /* no art_url sent */
     MUSE_NP_ART_LOADING,     /* a new cover, downloading */
     MUSE_NP_ART_UNCHANGED,   /* the cover showing */
-    MUSE_NP_ART_CLEARED,     /* art_url empty, or state idle */
+    MUSE_NP_ART_CLEARED,     /* art_url empty (or null) */
 } muse_np_art_t;
 
 /* media.update's fields, each NULL when not sent. */
@@ -97,9 +98,9 @@ static inline int muse_np_art_scale(int src_w, int src_h, int w, int h)
 }
 
 /* How a decoded dw x dh cover fills the w x h tile, centred: the tile's (x, y)
- * shows decoded pixel ((ox + x * step) >> 16, (oy + y * step) >> 16). step is
- * at most 1.0 (65536): bigger covers are cropped, smaller ones scaled up.
- * dw and dh are at most 4096. */
+ * shows decoded pixel ((ox + x * step) >> 16, (oy + y * step) >> 16), step
+ * in 1/65536 pixels. The cover is scaled (nearest neighbour) so it just fills
+ * the tile, and only the longer way is cropped. dw and dh are at most 4096. */
 typedef struct {
     uint32_t step, ox, oy;
 } muse_np_fit_t;
@@ -110,12 +111,16 @@ static inline muse_np_fit_t muse_np_art_fit(int dw, int dh, int w, int h)
     uint32_t sy = (uint32_t)(((uint64_t)dh << 16) / (uint32_t)h);
     muse_np_fit_t f;
     f.step = sx < sy ? sx : sy;
-    if (f.step > 65536) {
-        f.step = 65536;
-    }
     f.ox = (uint32_t)((((uint64_t)dw << 16) - (uint64_t)w * f.step) / 2);
     f.oy = (uint32_t)((((uint64_t)dh << 16) - (uint64_t)h * f.step) / 2);
     return f;
+}
+
+/* Whether a tap on row y of the h-tall tile asks for a refresh: not in the
+ * lower third, the buttons' row (Joshua's rule), nor off the tile. */
+static inline bool muse_np_tap_refreshes(int y, int h)
+{
+    return y >= 0 && y < h * 2 / 3;
 }
 
 /* The cover's brightness on row y of h, out of 256: 50% until 40% of the way

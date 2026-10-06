@@ -34,6 +34,10 @@ bool muse_art_init(int w, int h);
  * dropping a finished cover not yet taken. NULL just stops and drops. Any task. */
 void muse_art_fetch(const char *url);
 
+/* Whether `url` is the cover decoded last, or queued or downloading now. A
+ * cover that failed is none of these, so asking for it again retries. Any task. */
+bool muse_art_has(const char *url);
+
 /* The UI task: a newly finished cover (w x h RGB565, LVGL's byte order), or
  * NULL. It stays untouched until the next non-NULL muse_art_take(). */
 const uint16_t *muse_art_take(void);

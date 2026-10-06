@@ -190,6 +190,8 @@ optional strings; a missing one leaves that field unchanged.
 - Fill it from the NAS bridge: `ma.now_playing` (or `ma.control`'s answer)
   gives `name`, `title`, `artist`, `album`, `state`, `player_id` and `image`.
   Send `image` unchanged as `art_url`: Music Assistant only serves its own sizes.
+  If `image` is null (radio, a local file), send `art_url` as `""` so the last
+  track's cover goes. Other null fields can be sent as null or left out.
 - Don't poll. Call it after a Now Playing press, or when the user asks about
   the music or asks you to play, pause or skip.
 - When nothing is playing anywhere, send only `state` as `idle`. The tile keeps
@@ -209,9 +211,9 @@ asks for a refresh. Each arrives as a message:
 
 1. For `play_pause`, `next` or `previous`: call the bridge's `ma.control` with
    that `player_id` and `action`. It answers with that player's now-playing.
-2. For `refresh`: call `ma.now_playing` with that `player_id`. With no id,
-   call it with none and pick the player that's playing, else the first paused
-   one; if none is either, send only `state` as `idle`.
+2. For `refresh`: call `ma.now_playing` and find that `player_id` in its
+   `players` list. With no id, pick the player that's playing, else the first
+   paused one; if none is either, send only `state` as `idle`.
 3. Then call `media.update` on the gadget with the result, `player_id` and
    `art_url` included.
 4. Reply with only `ok`. Nothing is spoken.

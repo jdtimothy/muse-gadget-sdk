@@ -830,7 +830,8 @@ static cJSON *options_result(int n)
 
 /*
  * Checks media.update's fields into *f (pointers into params; NULL when not
- * sent). All are optional strings: state is playing, paused or idle; player_id
+ * sent or null, except a null art_url, which is ""). All are optional
+ * strings: state is playing, paused or idle; player_id
  * 1-64 bytes of printable ASCII; art_url empty (no art) or an http:// or
  * https:// address of at most 512 bytes. A bad or unknown parameter is
  * refused, saying why in err.
@@ -857,6 +858,13 @@ static bool parse_media(const cJSON *params, muse_np_fields_t *f, char *err, siz
             snprintf(err, cap, "unknown parameter %s: use player, title, artist, album, state, player_id and art_url",
                      name);
             return false;
+        }
+        if (cJSON_IsNull(v)) {
+            /* The bridge's null for what a track lacks: not sent, but a null cover clears it. */
+            if (slots[k] == &f->art_url) {
+                f->art_url = "";
+            }
+            continue;
         }
         if (!cJSON_IsString(v)) {
             snprintf(err, cap, "%s must be a string", names[k]);
