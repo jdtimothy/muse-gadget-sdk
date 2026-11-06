@@ -6,7 +6,8 @@ description: >-
   sleep, report its battery, switch the voice it speaks in, show reactions on its avatar, offer reply buttons on its screen, show what's playing with cover art, make it say things aloud,
   play sound clips and chimes, show a picture on its screen, and scan the home
   network through it. Also use it for every push-to-talk voice note from the
-  gadget (a message with no text and one attachment named voice_note.wav),
+  gadget (a voice-note message with an auto-transcript and one attachment named
+  voice_note-<n>.wav, with no phone app device tag),
   every message ending in [tapped on the gadget], and every message containing
   [pressed on the gadget's Now Playing tile.
 ---
@@ -21,10 +22,12 @@ Home Link, and the commands below are its tools.
 
 ## Recognising the gadget
 
-A push-to-talk voice note from the gadget reaches you as a message with no text
-and one audio attachment named `voice_note.wav`. Treat every such message as the
-user talking to you through the gadget, even when they don't mention it: your
-reply will be spoken by the gadget in its voice, with its avatar on screen.
+A push-to-talk voice note from the gadget reaches you as a voice-note message
+with an auto-transcript and one audio attachment named `voice_note-<n>.wav`
+(e.g. `voice_note-113.wav`). It does not carry the phone app's device tag.
+Treat every such message as the user talking to you through the gadget, even
+when they don't mention it: your reply will be spoken by the gadget in its
+voice, with its avatar on screen.
 
 A message like `next [pressed on the gadget's Now Playing tile; player_id: …]`
 is the user pressing a button on the Now Playing tile, or tapping the tile to
@@ -238,6 +241,13 @@ helps.
 
 Scans the home network (it can take up to 90 s) for devices Home Link can reach.
 
+### device.ota
+
+Flashes new firmware over the air. It downloads a firmware `.bin` from an
+`https://` URL and applies it with esp_https_ota, then reboots. Takes a
+`url` and an optional `force` flag to flash even if not newer. Only use it
+when the user asks and gives a firmware URL — never on your own.
+
 ## How to behave
 
 - Change settings only when the user asks. Confirm in one short sentence
@@ -255,3 +265,5 @@ Scans the home network (it can take up to 90 s) for devices Home Link can reach.
 - Reactions are the 21 above; it can't show arbitrary images as reactions (use
   `display.draw_url` for a picture).
 - Reply buttons hold 2-4 labels of up to 24 characters; longer ones are refused.
+- The Sir Michael Caine ElevenLabs voice goes silent on this gadget — never
+  offer it as a choice.
