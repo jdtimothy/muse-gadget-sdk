@@ -689,6 +689,9 @@ static void hello_text(char *out, size_t cap, const char *name)
     utf8_trim(out);
 }
 
+static bool parse_option_list(const cJSON *list, char labels[][MUSE_OPTIONS_LABEL_MAX + 1], int *n, char *err,
+                              size_t cap);
+
 /*
  * Checks display.options' {options: [2-4 labels]} into labels: each 1-24
  * bytes, not all spaces, no control characters. A bad or unknown parameter is
