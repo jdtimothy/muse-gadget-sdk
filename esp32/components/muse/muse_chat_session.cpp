@@ -1306,7 +1306,7 @@ static void tap_begin(uint32_t gen, const char *message, const char *caption)
     s_turn.tap = true;
     ESP_LOGI(TAG, "tapped: \"%s\"", caption);
     emit(MUSE_HATCH_EV_HEARD, caption);   /* the caption until the reply: what was tapped */
-    send_chat(message, "text");
+    send_chat(message, "text", true);
 }
 
 /* A Now Playing press (muse_gadget_media.c): a typed turn that reports
@@ -1326,7 +1326,7 @@ static void quiet_begin(const char *text)
     }
     s_quiet_open = true;   /* turn_start() closed the one it replaced */
     ESP_LOGI(TAG, "quiet turn: %u bytes", (unsigned)strlen(text));
-    send_chat(text, "text");
+    send_chat(text, "text", false);
 }
 
 static void on_dictation_line(cJSON *line)
