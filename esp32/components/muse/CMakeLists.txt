@@ -38,7 +38,8 @@ if(CONFIG_MUSE_ENABLED)
         "muse_lang.c"
         "muse_link.c"
         "muse_ble.c"
-        "muse_gadget_cmds.c")   # compiles to nothing without CONFIG_MUSE_GADGET_COMMANDS
+        "muse_gadget_cmds.c"    # compiles to nothing without CONFIG_MUSE_GADGET_COMMANDS
+        "muse_gadget_play.c")   # nor without CONFIG_MUSE_HATCH as well
     if(CONFIG_MUSE_UI_FREEINK)
         # E-paper: FreeInk draws the face, Settings and the keyboard.
         list(APPEND srcs "eink/muse_eink_ui.cpp" "eink/muse_eink_settings.cpp" "eink/muse_eink_fonts.cpp")
