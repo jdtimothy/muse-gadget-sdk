@@ -123,6 +123,7 @@ int main(void) {
         rule = prompt.split('Include only', 1)[1].split('\n\n', 1)[0]
         allowed = set(re.findall(r'(<[\w./]+>|"[\w./]+")', rule))
         used = set(re.findall(r'^#include\s+(<[^>]+>|"[^"]+")', (ROOT / 'avatar/muse_pixel.c').read_text(), re.M))
+        used -= {'"muse_reaction_colors.inc"', '"muse_reactions.inc"'}   # avatar.py strips the gadget's reactions
         self.assertLessEqual(used, allowed)
 
     def compile_run(self, source, renderer=False):
