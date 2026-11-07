@@ -99,6 +99,13 @@ bool muse_react_set(int id, int seconds)
     return settled;
 }
 
+void muse_react_drop_waiting(void)
+{
+    taskENTER_CRITICAL(&s_lock);
+    s_wait_id = MUSE_REACT_NONE;
+    taskEXIT_CRITICAL(&s_lock);
+}
+
 /* Fades `id` out now (as reactions end), if it's still the one showing. */
 static void fade_out(int id)
 {

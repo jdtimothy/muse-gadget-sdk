@@ -699,6 +699,7 @@ static bool play_one(job_t *job, QueueHandle_t presses)
     if (!atomic_load(&s_failed)) {
         return false;
     }
+    muse_state_poke();   /* the sleep clock starts when the sound ends */
     muse_state_set_mode(MUSE_MODE_IDLE);
     muse_state_set_caption("%s", say ? "COULDN'T SPEAK" : "COULDN'T PLAY THE CLIP");
     if (!shown) {
@@ -776,6 +777,7 @@ bool muse_play_run(QueueHandle_t presses)
             return true;
         }
     }
+    muse_state_poke();   /* the sleep clock starts when the sound ends */
     muse_state_set_mode(MUSE_MODE_IDLE);
     muse_state_set_caption("%s", "");
     return false;
