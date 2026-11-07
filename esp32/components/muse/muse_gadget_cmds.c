@@ -20,6 +20,10 @@
  *   device.settings  read or change volume, mute, brightness and screen
  *                    sleep; reports them with the battery and voice
  *   voice.select     list the ElevenLabs voices, or switch to one (async)
+ *   voice.say        say text aloud, captioned
+ *   audio.play_url   play an MP3 clip
+ *   audio.chime      play a built-in chime
+ *                    (all three queued for muse_gadget_play.c)
  * skills/gadget-muse-s318/SKILL.md tells Muse when to use each.
  *
  * Everything from "Pure (host-tested)" to "Device" builds on the host
@@ -39,6 +43,7 @@
 #include <strings.h>
 
 #include "cJSON.h"
+#include "muse_gadget_sound.h"
 
 /* ---- Pure (host-tested) ---- */
 
@@ -506,6 +511,173 @@ static const char *voice_fetch_error(int status, const char **message)
     return "network";
 }
 
+typedef struct {
+    muse_sound_kind_t kind;
+    const char *arg;   /* in params: the text, URL or chime name */
+    bool caption;      /* voice.say: show the text as it's said */
+} gadget_sound_t;
+
+/*
+ * A URL the player can fetch: https://, characters RFC 3986 allows (anything
+ * else percent-encoded), at most one user info, a host of letters, digits,
+ * dots and hyphens, and a port of 1-65535 if any. ESP-IDF's URL parser logs
+ * a URL it refuses in full, token and all, so nothing it would refuse gets
+ * that far.
+ */
+static bool usable_url(const char *url, size_t len)
+{
+    if (len <= 8 || len > MUSE_SOUND_URL_MAX || strncasecmp(url, "https://", 8)) {
+        return false;
+    }
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)url[i];
+        if (!isalnum(c) && !strchr("-._~:/?#[]@!$&'()*+,;=%", c)) {
+            return false;
+        }
+    }
+    const char *host = url + 8;
+    size_t n = strcspn(host, "/?#");   /* user info, host and port */
+    const char *at = memchr(host, '@', n);
+    if (at) {
+        if (memchr(at + 1, '@', n - (size_t)(at + 1 - host))) {
+            return false;
+        }
+        n -= (size_t)(at + 1 - host);
+        host = at + 1;
+    }
+    const char *colon = memchr(host, ':', n);
+    size_t host_len = colon ? (size_t)(colon - host) : n;
+    if (!host_len) {
+        return false;
+    }
+    for (size_t i = 0; i < host_len; i++) {
+        if (!isalnum((unsigned char)host[i]) && host[i] != '.' && host[i] != '-') {
+            return false;
+        }
+    }
+    if (colon) {
+        size_t digits = n - host_len - 1;
+        long port = 0;
+        for (size_t i = 1; i <= digits; i++) {
+            if (!isdigit((unsigned char)colon[i])) {
+                return false;
+            }
+            port = port * 10 + (colon[i] - '0');
+            if (port > 65535) {
+                return false;
+            }
+        }
+        if (!digits || !port) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/*
+ * Checks voice.say ({text, caption}), audio.play_url ({url}) or audio.chime
+ * ({name}) into *out; out->arg points into params. A missing, wrong or
+ * unknown parameter is refused, saying why in err.
+ */
+static bool parse_sound(const char *command, const cJSON *params, gadget_sound_t *out, char *err, size_t cap)
+{
+    const char *key = "name";
+    out->kind = MUSE_SOUND_CHIME;
+    if (!strcmp(command, "voice.say")) {
+        out->kind = MUSE_SOUND_SAY;
+        key = "text";
+    } else if (!strcmp(command, "audio.play_url")) {
+        out->kind = MUSE_SOUND_URL;
+        key = "url";
+    }
+    out->arg = NULL;
+    out->caption = true;
+    if (!cJSON_IsObject(params)) {
+        snprintf(err, cap, "%s is required", key);
+        return false;
+    }
+    const cJSON *v;
+    cJSON_ArrayForEach(v, params) {
+        if (!strcmp(v->string, key)) {
+            if (!cJSON_IsString(v)) {
+                snprintf(err, cap, "%s must be a string", key);
+                return false;
+            }
+            out->arg = v->valuestring;
+        } else if (out->kind == MUSE_SOUND_SAY && !strcmp(v->string, "caption")) {
+            if (!cJSON_IsBool(v)) {
+                snprintf(err, cap, "caption must be true or false");
+                return false;
+            }
+            out->caption = cJSON_IsTrue(v);
+        } else {
+            char name[41];
+            snprintf(name, sizeof(name), "%.40s", v->string);
+            utf8_trim(name);
+            snprintf(err, cap, "unknown parameter %s: use %s%s", name, key,
+                     out->kind == MUSE_SOUND_SAY ? " and caption" : "");
+            return false;
+        }
+    }
+    if (!out->arg) {
+        snprintf(err, cap, "%s is required", key);
+        return false;
+    }
+    size_t len = strlen(out->arg);
+    if (out->kind == MUSE_SOUND_SAY && (!len || len > MUSE_SOUND_SAY_MAX)) {
+        snprintf(err, cap, "text must be 1 to %d bytes", MUSE_SOUND_SAY_MAX);
+        return false;
+    }
+    if (out->kind == MUSE_SOUND_URL && !usable_url(out->arg, len)) {
+        snprintf(err, cap, "url must be an https:// address of at most %d bytes, without spaces",
+                 MUSE_SOUND_URL_MAX);
+        return false;
+    }
+    if (out->kind == MUSE_SOUND_CHIME && muse_chime_find(out->arg) < 0) {
+        snprintf(err, cap, "name must be " MUSE_CHIME_NAMES);
+        return false;
+    }
+    return true;
+}
+
+/* What a sound's muse_play_enqueue() gave: its place in the queue (1 = next),
+ * 0 when the queue is full, -1 out of memory. */
+static cJSON *sound_result(int position)
+{
+    if (position == 0) {
+        return gadget_error("busy", "sounds are already waiting to play; try again in a few seconds");
+    }
+    if (position < 0) {
+        return gadget_error("out_of_memory", "no room for the sound");
+    }
+    cJSON *p;
+    cJSON *result = gadget_ok(&p);
+    cJSON_AddBoolToObject(p, "queued", true);
+    cJSON_AddNumberToObject(p, "position", position);
+    return result;
+}
+
+/* The speaker is off: speech with a caption is shown instead, anything else waits for unmuting. */
+static cJSON *muted_error(muse_sound_kind_t kind, bool caption)
+{
+    return gadget_error("muted", kind == MUSE_SOUND_SAY && caption
+                                     ? "the speaker is muted, so the text is shown on the screen instead"
+                                     : "the speaker is muted: unmute it with device.settings first if the user wants sound");
+}
+
+/* What a new voice says first: "Hi, I'm George." for "George - Warm, Captivating Storyteller". */
+static void hello_text(char *out, size_t cap, const char *name)
+{
+    const char *dash = strstr(name, " - ");
+    size_t n = dash ? (size_t)(dash - name) : strlen(name);
+    if (!n) {
+        snprintf(out, cap, "Hi, this is my new voice.");
+        return;
+    }
+    snprintf(out, cap, "Hi, I'm %.*s.", (int)(n > GADGET_VOICE_NAME_MAX ? GADGET_VOICE_NAME_MAX : n), name);
+    utf8_trim(out);
+}
+
 /* ---- Device ---- */
 
 #include "esp_log.h"
@@ -518,6 +690,7 @@ static const char *voice_fetch_error(int status, const char **message)
 #include "freertos/idf_additions.h"
 #include "freertos/task.h"
 #if CONFIG_MUSE_HATCH
+#include "muse_gadget_play.h"
 #include "muse_tts_elevenlabs.h"
 #endif
 
@@ -628,6 +801,11 @@ static cJSON *voice_select(const char *name)
             result = gadget_error("internal", "couldn't save the voice");
         } else {
             result = selected_result(&v[i]);
+            if (muse_settings_speaker_on()) {
+                char hello[80];
+                hello_text(hello, sizeof(hello), v[i].name);
+                muse_play_enqueue(MUSE_SOUND_SAY, hello, true);   /* plays once any reply is done */
+            }
         }
     }
     free(v);
@@ -678,6 +856,26 @@ static cJSON *voice_select_start(const cJSON *params, const char *request_id,
     cJSON_AddBoolToObject(async, "_async", true);
     return async;
 }
+
+/* voice.say, audio.play_url and audio.chime: queued for the voice task to play when idle. */
+static cJSON *sound_command(const char *command, const cJSON *params)
+{
+    gadget_sound_t s;
+    char err[160];
+    if (!parse_sound(command, params, &s, err, sizeof(err))) {
+        return gadget_error("invalid_params", err);
+    }
+    if (s.kind == MUSE_SOUND_SAY && !muse_tts_enabled()) {
+        return gadget_error("unavailable", "speech is off: no ElevenLabs key is set on the gadget");
+    }
+    if (!muse_settings_speaker_on()) {
+        if (s.kind == MUSE_SOUND_SAY && s.caption) {
+            muse_play_enqueue(s.kind, s.arg, true);   /* shown, not said */
+        }
+        return muted_error(s.kind, s.caption);
+    }
+    return sound_result(muse_play_enqueue(s.kind, s.arg, s.caption));
+}
 #endif
 
 static cJSON *param(const char *type, const char *description)
@@ -691,14 +889,22 @@ static cJSON *param(const char *type, const char *description)
 /* As add_command() in noise_control.cpp. Keep descriptions short: link.register
  * must fit in 8 KB, and the skill says the rest. */
 static cJSON *add_command(cJSON *commands, const char *name, const char *description,
-                          cJSON *optional)
+                          cJSON *required, cJSON *optional)
 {
     cJSON *c = cJSON_CreateObject();
     cJSON_AddStringToObject(c, "description", description);
-    cJSON_AddItemToObject(c, "required", cJSON_CreateObject());
+    cJSON_AddItemToObject(c, "required", required ? required : cJSON_CreateObject());
     cJSON_AddItemToObject(c, "optional", optional ? optional : cJSON_CreateObject());
     cJSON_AddItemToObject(commands, name, c);
     return c;
+}
+
+/* {name: param(type, description)}, for one parameter. */
+static cJSON *one_param(const char *name, const char *type, const char *description)
+{
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddItemToObject(o, name, param(type, description));
+    return o;
 }
 
 void muse_gadget_add_commands(cJSON *commands)
@@ -712,13 +918,20 @@ void muse_gadget_add_commands(cJSON *commands)
     add_command(commands, "device.settings",
                 "Read or change volume, mute, brightness and screen sleep. "
                 "Reports them all, with the battery and voice.",
-                opt);
+                NULL, opt);
 #if CONFIG_MUSE_HATCH
     cJSON *vopt = cJSON_CreateObject();
     cJSON_AddItemToObject(vopt, "name", param("string", "Voice to switch to; without it, lists them."));
     cJSON *v = add_command(commands, "voice.select",
-                           "List the ElevenLabs voices replies can be spoken in, or switch to one.", vopt);
+                           "List the ElevenLabs voices replies can be spoken in, or switch to one.", NULL, vopt);
     cJSON_AddNumberToObject(v, "timeout_ms", 30000);
+    add_command(commands, "voice.say", "Say text aloud on the gadget, captioned. Queued: plays once it's idle.",
+                one_param("text", "string", "What to say, up to 600 bytes."),
+                one_param("caption", "boolean", "false: don't show it."));
+    add_command(commands, "audio.play_url", "Play an MP3 from an https URL (up to 1 MB, 60 s). Queued.",
+                one_param("url", "string", "https:// link to an MP3."), NULL);
+    add_command(commands, "audio.chime", "Play a built-in chime. Queued.",
+                one_param("name", "string", MUSE_CHIME_NAMES "."), NULL);
 #endif
 }
 
@@ -731,6 +944,9 @@ cJSON *muse_gadget_command(const char *command, cJSON *params, const char *reque
 #if CONFIG_MUSE_HATCH
     if (!strcmp(command, "voice.select")) {
         return voice_select_start(params, request_id, session_generation, send);
+    }
+    if (!strcmp(command, "voice.say") || !strcmp(command, "audio.play_url") || !strcmp(command, "audio.chime")) {
+        return sound_command(command, params);
     }
 #else
     (void)request_id;
