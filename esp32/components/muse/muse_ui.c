@@ -54,7 +54,11 @@
 #include "muse_review.h"
 #endif
 #if CONFIG_MUSE_GADGET_COMMANDS && CONFIG_MUSE_HATCH
+#include "muse_gadget_media.h"
 #include "muse_gadget_options.h"
+#define NP_TILE 1   /* Now Playing (muse_gadget_media.c), the tile left of the face */
+#else
+#define NP_TILE 0
 #endif
 #if CONFIG_MUSE_WATCHER_CAMERA
 #include "boards/watcher_camera.h"
@@ -136,7 +140,8 @@ bool muse_ui_face_active(void)
     return s_face_active;
 }
 static lv_obj_t *s_settings;
-static lv_obj_t *s_dots[2];
+static lv_obj_t *s_dots[2 + NP_TILE];
+static lv_obj_t *s_np;         /* the Now Playing tile, or NULL */
 static lv_obj_t *s_wifi_icon;
 static lv_obj_t *s_ble_icon;
 static lv_obj_t *s_cover;
@@ -1146,7 +1151,14 @@ static void build_screen(void)
         lv_obj_set_style_bg_color(s_tv, lv_color_black(), 0);
         lv_obj_set_style_bg_opa(s_tv, LV_OPA_COVER, 0);
         lv_obj_set_scrollbar_mode(s_tv, LV_SCROLLBAR_MODE_OFF);
-        s_face = lv_tileview_add_tile(s_tv, 0, 0, LV_DIR_RIGHT);
+#if NP_TILE
+        /* Now Playing: swipe right from the face. LVGL's tile indexes are
+         * unsigned, so it is column 0 and the face, column 1, is shown first. */
+        s_np = lv_tileview_add_tile(s_tv, 0, 0, LV_DIR_RIGHT);
+        lv_obj_set_scrollbar_mode(s_np, LV_SCROLLBAR_MODE_OFF);
+        muse_media_build(s_np, s_w, s_h);
+#endif
+        s_face = lv_tileview_add_tile(s_tv, NP_TILE, 0, NP_TILE ? LV_DIR_LEFT | LV_DIR_RIGHT : LV_DIR_RIGHT);
         /* It never scrolls, but LVGL would size its scrollbars from all its
          * children every time it draws any part of it. */
         lv_obj_set_scrollbar_mode(s_face, LV_SCROLLBAR_MODE_OFF);
@@ -1154,7 +1166,9 @@ static void build_screen(void)
          * shows as a different-coloured square around the character. */
         lv_obj_set_style_bg_color(s_face, lv_color_black(), 0);
         lv_obj_set_style_bg_opa(s_face, LV_OPA_COVER, 0);
-        s_settings = lv_tileview_add_tile(s_tv, 1, 0, LV_DIR_LEFT);
+        s_settings = lv_tileview_add_tile(s_tv, NP_TILE + 1, 0, LV_DIR_LEFT);
+        lv_obj_update_layout(s_tv);
+        lv_tileview_set_tile(s_tv, s_face, LV_ANIM_OFF);
         lv_obj_add_event_cb(s_tv, tile_changed_cb, LV_EVENT_VALUE_CHANGED, NULL);
         face = s_face;
     }
@@ -1489,8 +1503,8 @@ static void build_overlays(void)
 {
     lv_obj_t *scr = lv_screen_active();
 
-    /* Page dots. */
-    for (int i = 0; i < 2 && s_tv; i++) {
+    /* Page dots: (Now Playing,) face, settings. */
+    for (int i = 0; i < 2 + NP_TILE && s_tv; i++) {
         lv_obj_t *d = lv_obj_create(scr);
         lv_obj_remove_style_all(d);
         lv_obj_set_size(d, 8, 8);
@@ -1498,7 +1512,7 @@ static void build_overlays(void)
         lv_obj_set_style_bg_opa(d, LV_OPA_COVER, 0);
         lv_obj_set_style_bg_color(d, lv_color_hex(COLOR_DOT_OFF), 0);
         lv_obj_remove_flag(d, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_align(d, LV_ALIGN_BOTTOM_MID, i ? 8 : -8, -14);
+        lv_obj_align(d, LV_ALIGN_BOTTOM_MID, (2 * i - 1 - NP_TILE) * 8, -14);
         s_dots[i] = d;
     }
 
@@ -1669,19 +1683,22 @@ static void update_chrome(float now)
     s_next_settings_tick = now + SETTINGS_TICK_S;
 
     if (s_tv) {
-        int page = lv_tileview_get_tile_active(s_tv) == s_settings;
+        lv_obj_t *active = lv_tileview_get_tile_active(s_tv);
+        const int settings_page = NP_TILE + 1;
+        int page = active == s_settings ? settings_page : (s_np && active == s_np) ? 0 : NP_TILE;
         bool subpage = muse_settings_ui_in_subpage();
-        s_swipe_enabled = !page || !subpage;
+        s_swipe_enabled = page != settings_page || !subpage;
         update_tileview_swipe();
         int shown = page * 2 + subpage;
         if (shown != s_shown_page) {
-            for (int i = 0; i < 2; i++) {
+            for (int i = 0; i < 2 + NP_TILE; i++) {
                 lv_obj_set_style_bg_color(s_dots[i], lv_color_hex(i == page ? COLOR_ACCENT : COLOR_DOT_OFF), 0);
-                lv_obj_set_flag(s_dots[i], LV_OBJ_FLAG_HIDDEN, page && subpage);
+                lv_obj_set_flag(s_dots[i], LV_OBJ_FLAG_HIDDEN, page == settings_page && subpage);
             }
             s_shown_page = shown;
         }
-        muse_settings_ui_tick(lv_obj_get_scroll_x(s_tv) > 0);
+        /* Settings is partly in view once the scroll passes the face. */
+        muse_settings_ui_tick(lv_obj_get_scroll_x(s_tv) > lv_obj_get_x(s_face));
     }
 
     /* Joining, the icon blinks: the compact layout has no state label. */
@@ -2119,6 +2136,9 @@ static void frame_tick(lv_timer_t *timer)
     }
     (void)timer;
     image_sync();
+#if NP_TILE
+    muse_media_frame();
+#endif
     float mode_t;
     muse_mode_t mode = muse_state_mode(&mode_t);
     float now = (float)esp_timer_get_time() / 1e6f;
@@ -2148,9 +2168,10 @@ static void frame_tick(lv_timer_t *timer)
     if (s_image_dsc.data) {
         return;   /* the image covers the face */
     }
-    if (s_tv && lv_obj_get_scroll_x(s_tv) != 0) {
-        /* Off screen, or sliding to or from settings: hold still so the
-         * slide gets the whole frame time. */
+    if (s_tv && lv_obj_get_scroll_x(s_tv) != lv_obj_get_x(s_face)) {
+        /* Off screen, or sliding to or from another tile: hold still so the
+         * slide gets the whole frame time. (The face is column 1 when Now
+         * Playing is column 0, so it shows at the face's x, not at 0.) */
         return;
     }
 
