@@ -30,6 +30,7 @@ class ChatSession(unittest.TestCase):
         chat = source[source.index('static void send_chat('):source.index('static void on_dictation_line(')]
         kinds = source.index('enum kind_t')
         kinds = source[kinds:source.index('\n', kinds) + 1]
+        silently = source[source.index('static void show_silently('):source.index('/*\n * Replies are text. With an ElevenLabs')]
         tts = source.index('static void start_tts(void)')
         start_tts = source[tts:source.index('\n}\n', tts) + 3]
         code = r'''
@@ -52,6 +53,13 @@ class ChatSession(unittest.TestCase):
 #define ESP_LOGW(...) ((void)0)
 ''' + constants + types + r'''
 static turn_t s_turn;
+/* The gadget's hooks in the code under test: no quiet turns, no ElevenLabs key. */
+static bool s_quiet_next, s_quiet_open;
+static bool muse_tts_enabled(void) { return false; }
+static bool muse_settings_speaker_on(void) { return true; }
+static uint32_t muse_tts_start(const char *, size_t) { return 0; }
+static void muse_tts_cancel(void) {}
+void mp3dec_init(mp3dec_t *) {}
 static char s_reply_shown[EV_TEXT];
 static int64_t s_last_seq, s_marks[4];
 static int captions, console_events;
@@ -113,7 +121,7 @@ static int64_t open_stream(kind_t kind, const char *verb, const char *path, cons
 static bool send_body(int64_t, const uint8_t *, size_t, bool) { return true; }
 static void disconnect(const char *) {}
 static bool send_reset(int64_t) { return true; }
-''' + done + reset + handlers + start_tts + check + chat + r'''
+''' + done + reset + handlers + silently + start_tts + check + chat + r'''
 static void begin(bool typed = false) {
     clock_us = 12345;
     assert(turn_start(s_turn.gen + 1, typed));
@@ -465,7 +473,7 @@ int main(int argc, char **argv) {
 }
 '''
         (out / 'session.cpp').write_text(code)
-        flags = ['-Wall', '-Wextra', '-Werror', '-I', str(JSON),
+        flags = ['-Wall', '-Wextra', '-Werror', '-Wno-unused-function', '-I', str(JSON),
                  '-I', str(ROOT / 'tests'), '-I', str(ROOT / 'components/muse'),
                  '-I', str(ROOT / 'components/minimp3/include')]
         commands = [

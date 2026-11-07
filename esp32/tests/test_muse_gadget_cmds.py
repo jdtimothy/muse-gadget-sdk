@@ -104,6 +104,7 @@ class MuseGadgetCmdsSourceTest(unittest.TestCase):
         noise = (ROOT / "main/noise_control.cpp").read_text()
         hook = re.search(
             r"#if CONFIG_MUSE_GADGET_COMMANDS\s*\n\s*muse_gadget_add_commands\(commands\);\s*\n#endif\s*\n"
+            r"(?:#if CONFIG_HOMEHUB_BLE_COMMANDS\s*\n\s*ble_commands_register\(commands\);\s*\n#endif\s*\n)?"
             r"\s*cJSON_AddItemToObject\(params, \"commands_v2\", commands\);", noise)
         self.assertIsNotNone(hook, "build_register_json() lacks the muse_gadget_add_commands hook")
 
@@ -276,7 +277,7 @@ class MuseGadgetCmdsSourceTest(unittest.TestCase):
         tap = tap[:tap.index("\n}\n")]
         self.assertIn("turn_start(gen, false)", tap)        # spoken, like a voice turn
         self.assertIn("emit(MUSE_HATCH_EV_HEARD, caption)", tap)
-        self.assertIn('send_chat(message, "text")', tap)
+        self.assertIn('send_chat(message, "text", true)', tap)
         self.assertIn("if (!s_turn.tap) {", session)          # no "note sent" caption for a tap
 
     def test_art_is_built_and_logs_no_urls(self):
@@ -306,7 +307,7 @@ class MuseGadgetCmdsSourceTest(unittest.TestCase):
         quiet = quiet[:quiet.index("\n}\n")]
         self.assertIn("turn_start(0, true)", quiet)            # typed: no events reach the voice task
         self.assertIn("s_quiet_next = true;", quiet)
-        self.assertIn('send_chat(text, "text")', quiet)
+        self.assertIn('send_chat(text, "text", false)', quiet)
         start = session[session.index("static bool turn_start("):]
         self.assertIn("s_turn.quiet = s_quiet_next;", start[:start.index("\n}\n")])
         finish = session[session.index("static void turn_finish("):]
