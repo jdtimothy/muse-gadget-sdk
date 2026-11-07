@@ -44,6 +44,7 @@
 #endif
 #if CONFIG_MUSE_GADGET_COMMANDS && CONFIG_MUSE_HATCH
 #include "muse_gadget_play.h"
+#include "muse_gadget_options.h"
 #endif
 
 static const char *TAG = "muse_voice";
@@ -1163,6 +1164,24 @@ static void run_call(bool ptt, size_t waking_chunks)
 }
 #endif
 
+#if CONFIG_MUSE_GADGET_COMMANDS && CONFIG_MUSE_HATCH
+/* A tapped reply option (muse_gadget_options.c): sent as text, its answer
+ * played like a press's. True if a press cut in. */
+static bool tap_turn(const char *message, const char *caption)
+{
+    if (!muse_hatch_ready()) {
+        go_idle(not_ready_reason());
+        return false;
+    }
+    if (!muse_hatch_tap_turn(message, caption)) {
+        go_idle("BUSY, TRY AGAIN");
+        return false;
+    }
+    bool delivered;
+    return hatch_reply(&delivered);
+}
+#endif
+
 static void voice_task(void *arg)
 {
     bool pending_down = false;
@@ -1232,6 +1251,18 @@ static void voice_task(void *arg)
                 if (pending_down) {
                     continue;   /* records it, as a press during a reply */
                 }
+            }
+            /* A reply option tapped on screen (muse_gadget_options.c). */
+            static char message[MUSE_OPTIONS_MSG_MAX], label[MUSE_OPTIONS_LABEL_MAX + 1];
+            if (muse_options_take_tap(message, sizeof(message), label, sizeof(label))) {
+                muse_wifi_power(MUSE_WIFI_FULL);
+                pending_down = tap_turn(message, label);
+                pre_reset();
+                if (!pending_down && muse_state_mode(NULL) != MUSE_MODE_IDLE) {
+                    muse_state_make_happy();
+                    go_idle("");
+                }
+                continue;
             }
 #endif
             /* The 20 ms read paces this loop. */

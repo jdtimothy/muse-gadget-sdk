@@ -47,7 +47,7 @@ typedef struct {
     muse_note_t notes[4];
 } muse_chime_t;
 
-/* 0.4-2.7 s each. */
+/* 0.3-2.7 s each. */
 static const muse_chime_t MUSE_CHIMES[] = {
     { "ding", 1, 1, { { 1319, 600, 0 } } },
     { "success", 1, 2, { { 784, 120, 0 }, { 1175, 300, 0 } } },
@@ -55,9 +55,10 @@ static const muse_chime_t MUSE_CHIMES[] = {
     { "alert", 3, 1, { { 1568, 90, 70 } } },
     { "timer", 4, 2, { { 1047, 100, 60 }, { 1047, 100, 400 } } },
     { "tada", 1, 4, { { 523, 90, 10 }, { 659, 90, 10 }, { 784, 90, 10 }, { 1047, 450, 0 } } },
+    { "choose", 1, 2, { { 880, 90, 40 }, { 1175, 180, 0 } } },   /* "your turn": reply options are up */
 };
 #define MUSE_CHIME_COUNT ((int)(sizeof(MUSE_CHIMES) / sizeof(MUSE_CHIMES[0])))
-#define MUSE_CHIME_NAMES "ding, success, error, alert, timer or tada"
+#define MUSE_CHIME_NAMES "ding, success, error, alert, timer, tada or choose"
 
 /* The chime called `name`, ignoring case: its index in MUSE_CHIMES, or -1. */
 static inline int muse_chime_find(const char *name)
