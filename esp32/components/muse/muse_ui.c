@@ -53,6 +53,9 @@
 #if CONFIG_MUSE_BOARD_SENSECAP_WATCHER
 #include "muse_review.h"
 #endif
+#if CONFIG_MUSE_GADGET_COMMANDS
+#include "muse_gadget_react.h"
+#endif
 #if CONFIG_MUSE_GADGET_COMMANDS && CONFIG_MUSE_HATCH
 #include "muse_gadget_media.h"
 #include "muse_gadget_options.h"
@@ -2261,7 +2264,10 @@ static void frame_tick(lv_timer_t *timer)
         .working = muse_voice_call_view() == MUSE_VOICE_VIEW_WORKING ? 1.0f : 0,
     };
     if (!muse_board->epaper || mode != s_last_epaper_pose) {
-        muse_pixel_render(&pose);
+    #if CONFIG_MUSE_GADGET_COMMANDS
+    pose.reaction = muse_react_pose(&pose.react_t, &pose.react_amount);
+#endif
+    muse_pixel_render(&pose);
         invalidate_muse();
         s_last_epaper_pose = mode;
     }

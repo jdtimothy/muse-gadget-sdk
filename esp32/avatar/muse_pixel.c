@@ -7,6 +7,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Reactions (avatar.react): ours, in components/muse, kept out of this file. */
+#include "muse_reaction_colors.inc"
+
 #define W MUSE_PX_W
 #define H MUSE_PX_H
 #define TAU 6.2831853f
@@ -45,6 +48,7 @@ enum {
     C_SHADOW,
     C_HEART,
     C_WHITE,
+    REACT_COLOR_IDS
     C_COUNT,
 };
 
@@ -93,6 +97,7 @@ static const uint32_t FIXED[C_COUNT] = {
     [C_SHADOW] = 0x16101f,
     [C_HEART] = 0xff4f8b,
     [C_WHITE] = 0xffffff,
+    REACT_COLOR_VALUES
 };
 
 static rgb_t s_scheme[5];      /* live, blended: f0..f3, acc */
@@ -927,6 +932,8 @@ void muse_pixel_scale(uint16_t *dst, int stride_px, int x0, int x1, int y0, int 
     }
 }
 
+#include "muse_reactions.inc"
+
 void muse_pixel_render(const muse_pose_t *p)
 {
     static muse_speaking_t speech;
@@ -947,7 +954,7 @@ void muse_pixel_render(const muse_pose_t *p)
     bool working = mode == MUSE_MODE_THINKING && p->working > 0.5f;
     muse_speaking_update(&speech, mode == MUSE_MODE_SPEAKING, dt, p->mode_t, level);
 
-    update_palette(working ? &WORKING_SCHEME : &SCHEMES[mode], dt);
+    update_palette(react_scheme(p, working ? &WORKING_SCHEME : &SCHEMES[mode]), dt);
     float blink = eyes_update(p, dt);
 
     memset(s_fb, C_BG, sizeof(s_fb));
@@ -987,6 +994,7 @@ void muse_pixel_render(const muse_pose_t *p)
     float pop = mode == MUSE_MODE_BOOT ? clampf(p->mode_t / 0.6f, 0, 1) : 1.0f;
     float squash = 1.0f - (1.0f - pop) * 0.35f + sinf(pop * 3.1416f) * 0.06f;
 
+    react_motion(p, &bob, &lean, &hop);
     float breathe = sinf(t * breathe_rate + 1.0f) * 0.03f;
     avatar_t j;
     j.a = 16.0f * (1 + breathe) * (2.0f - squash) + level * 0.8f;
@@ -1009,6 +1017,7 @@ void muse_pixel_render(const muse_pose_t *p)
         draw_rings(j.cx, j.fy + 2, t, level, 0.6f);
     }
     draw_shadow(j.cx, 58.5f, 13.0f - hop * 0.8f);
+    react_prop_back(p, &j);
 
     float spk_speed = working ? 1.8f : mode == MUSE_MODE_THINKING ? 2.8f : mode == MUSE_MODE_LISTENING ? 1.2f
                     : mode == MUSE_MODE_SPEAKING ? 1.5f : 0.6f;
@@ -1096,6 +1105,7 @@ void muse_pixel_render(const muse_pose_t *p)
     memcpy(previous_arms, arms, sizeof(arms));
     previous_mode = mode;
     previous_t = p->t;
+    react_arms(p, &j, arms);
     draw_avatar(&j, arms, feet);
 
     /* ---- face ---- */
@@ -1152,11 +1162,14 @@ void muse_pixel_render(const muse_pose_t *p)
 
     float gaze_x = s_eyes.gx;
     if (mode == MUSE_MODE_SPEAKING) gaze_x = clampf(gaze_x + speech.gaze, -1, 1);
-    draw_eye(j.fx - eye_dx, eye_y, open, style, gaze_x, s_eyes.gy);
-    draw_eye(j.fx + eye_dx, eye_y, open, style, gaze_x, s_eyes.gy);
+    if (!react_eyes(p, j.fx - eye_dx, j.fx + eye_dx, eye_y, open, gaze_x, s_eyes.gy)) {
+        draw_eye(j.fx - eye_dx, eye_y, open, style, gaze_x, s_eyes.gy);
+        draw_eye(j.fx + eye_dx, eye_y, open, style, gaze_x, s_eyes.gy);
+    }
 
     /* Tiny brows for the expressive states. */
     int bl = iround(j.fx - eye_dx), br = iround(j.fx + eye_dx), by = iround(eye_y) - 4;
+    if (!react_brows(p, bl, br, by)) {
     if (working) {
         /* Busy, not puzzled: brows up a touch. */
         px(bl - 1, by - 1, C_BROW); px(bl, by - 1, C_BROW);
@@ -1172,12 +1185,16 @@ void muse_pixel_render(const muse_pose_t *p)
         px(bl - 1, by - raise, C_BROW); px(bl, by - raise, C_BROW);
         px(br - 1, by - raise, C_BROW); px(br, by - raise, C_BROW);
     }
+    }
 
     float blush = 0.55f + happy * 0.45f + (mode == MUSE_MODE_SPEAKING ? 0.15f : 0.0f);
+    blush = react_blush(p, blush);
     draw_blush(iround(j.fx - j.fa * 0.72f), iround(eye_y + 2), blush);
     draw_blush(iround(j.fx + j.fa * 0.72f), iround(eye_y + 2), blush);
 
-    draw_mouth(iround(j.fx), iround(eye_y + 3), mouth, mouth_open);
+    if (!react_mouth(p, iround(j.fx), iround(eye_y + 3))) {
+        draw_mouth(iround(j.fx), iround(eye_y + 3), mouth, mouth_open);
+    }
 
     /* ---- foreground ---- */
     draw_sparkles(p, j.cx, j.cy, true, spk_speed, spk_count);
@@ -1189,7 +1206,7 @@ void muse_pixel_render(const muse_pose_t *p)
     if (working) {
         draw_keys(j.cx, ay + 4.5f, t);
         draw_spinner(j.cx + 16, top + 3, t);
-    } else if (mode == MUSE_MODE_THINKING) {
+    } else if (mode == MUSE_MODE_THINKING && !react_hides_dots(p)) {
         draw_thought_dots(j.cx + 14, top + 2, t);
     }
     if (happy > 0) {
@@ -1198,5 +1215,6 @@ void muse_pixel_render(const muse_pose_t *p)
     if (mode == MUSE_MODE_ERROR) {
         draw_alert(iround(j.cx + 18), iround(top - 1));
     }
+    react_prop_front(p, &j);
 
 }

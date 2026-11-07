@@ -3,7 +3,7 @@ name: gadget-muse-s318
 description: >-
   Use the user's Muse Gadget, a desk companion on a Waveshare ESP32-S3 1.8" AMOLED
   running the Muse Gadget SDK: read or change its volume, mute, brightness and screen
-  sleep, report its battery, switch the voice it speaks in, offer reply buttons on its screen, show what's playing with cover art, make it say things aloud,
+  sleep, report its battery, switch the voice it speaks in, show reactions on its avatar, offer reply buttons on its screen, show what's playing with cover art, make it say things aloud,
   play sound clips and chimes, show a picture on its screen, and scan the home
   network through it. Also use it for every push-to-talk voice note from the
   gadget (a voice-note message with an auto-transcript and one attachment named
@@ -37,9 +37,15 @@ and reply with only `ok`. Nothing you write on that turn is spoken or shown.
 A message ending in `[tapped on the gadget]` is the user tapping one of the
 reply buttons you offered with `display.options`: the words before the tag are
 their reply. Treat it exactly like a voice note (your answer is spoken by the
-gadget; offer new buttons if they fit). Don't repeat the tag.
+gadget; react if it fits; offer new buttons if they fit). Don't repeat the tag.
 
-On those turns, reply as usual, in one or two spoken sentences.
+On those turns, before you write your reply:
+
+1. Decide whether a reaction fits what the user said (see `avatar.react`): good
+   news, a joke, a kind word, a yes/no question, a weather question, and so on.
+   Most turns still need none.
+2. If one fits, call `avatar.react` first. It plays just after your reply ends.
+3. Then reply as usual, in one or two spoken sentences.
 
 ## Commands
 
@@ -124,6 +130,30 @@ Plays an MP3 from an `https://` URL: at most 1 MB and 60 s, which cuts longer
 clips off. Queued like `voice.say`. Only use URLs the user gives you, or
 well-known public sound clips. If it can't play the clip, the gadget shows
 "COULDN'T PLAY THE CLIP"; you won't hear about it, so don't promise it played.
+
+### avatar.react
+
+Shows a reaction on the avatar for `seconds` (1-30, default 4), then it eases
+back. `name` is one of: `love`, `laugh`, `excited`, `surprised`, `confused`,
+`sad`, `grumpy`, `sleepy`, `nervous`, `cool`, `wink`, `yes`, `no`,
+`celebrate`, and for weather `sunny`, `rainy`, `stormy`, `cold`, `windy`, `hot`,
+`rainbow`. `none` clears it. It answers at once. Reactions never play while the
+gadget talks or thinks: one you call during a turn waits and plays in full just
+after your spoken reply ends (the answer says `waiting`). A talk press cancels
+it. So call it before you reply, and let the reply finish on it.
+
+- React sparingly: at most one reaction a reply, and not on every turn. Most
+  replies need none.
+- Weather answers use the matching weather reaction (rain or showers `rainy`,
+  thunder `stormy`, snow or freezing `cold`, clear `sunny`, very warm `hot`,
+  breezy `windy`, sun after rain `rainbow`).
+- How long: 4 seconds suits most; a weather answer 8.
+- `yes` and `no` go with a clear yes or no answer. `celebrate` or `excited`
+  with good news. `love` when the user says something kind. `laugh` at a joke.
+- `sad`, `nervous` and `grumpy` only when they fit what the user said, never
+  at the user.
+- Don't narrate the reaction ("I'm showing an umbrella"), and don't react on
+  the user's behalf to something they didn't share.
 
 ### display.options
 
@@ -229,6 +259,8 @@ when the user asks and gives a firmware URL — never on your own.
 - A new voice takes effect from the next reply, and says hello once it's chosen.
 - Sounds play one after another, after any reply in progress. The talk button
   stops them.
+- Reactions are the 21 above, and they play after a reply, never during it; it
+  can't show arbitrary images as reactions (use `display.draw_url` for a picture).
 - Reply buttons hold 2-4 labels of up to 24 characters; longer ones are refused.
 - The Sir Michael Caine ElevenLabs voice goes silent on this gadget — never
   offer it as a choice.
