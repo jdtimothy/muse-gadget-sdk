@@ -328,6 +328,13 @@ class MuseGadgetCmdsSourceTest(unittest.TestCase):
         self.assertLess(voice.index("pending_down = tap_turn(message, label);"),
                         voice.index("/* The 20 ms read paces this loop. */"))
 
+    def test_s318_leaves_room_for_command_results(self):
+        # noise_control sends a result only with 16 KB of DMA memory free
+        # (NOISE_TX_DMA_RESERVE_BYTES); without this the board idles at 15 KB
+        # and every command times out at Muse.
+        overlay = (ROOT / "devices/sdkconfig.muse-waveshare-s3-18").read_text()
+        self.assertIn("CONFIG_MUSE_STATIC_BUFFERS_IN_PSRAM=y", overlay)
+
     def test_animation_is_metas(self):
         pixel = (ROOT / "avatar/muse_pixel.c").read_text(encoding="utf-8")
         self.assertNotIn("react_", pixel)
