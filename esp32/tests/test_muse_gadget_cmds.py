@@ -368,6 +368,13 @@ class MuseGadgetCmdsSourceTest(unittest.TestCase):
         self.assertIn('"avatar.react"', body)
         self.assertIn("react_command(params)", body)
 
+    def test_a_finished_turn_does_not_hop(self):
+        # Only the reaction Muse chose plays after a reply: no hop and hearts.
+        voice = (ROOT / "components/muse/muse_voice.c").read_text()
+        self.assertNotIn("muse_state_make_happy", voice)
+        # Petting the character still does it.
+        self.assertIn("muse_state_make_happy", (ROOT / "components/muse/muse_ui.c").read_text())
+
     def test_reactions_wait_out_a_turn(self):
         react = (ROOT / "components/muse/muse_gadget_react.c").read_text()
         self.assertIn("muse_react_wait_step(mode == MUSE_MODE_LISTENING, held,", react)
