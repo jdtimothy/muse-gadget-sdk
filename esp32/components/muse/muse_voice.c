@@ -44,6 +44,7 @@
 #endif
 #if CONFIG_MUSE_GADGET_COMMANDS && CONFIG_MUSE_HATCH
 #include "muse_gadget_play.h"
+#include "muse_gadget_react.h"
 #include "muse_gadget_options.h"
 #endif
 
@@ -1314,6 +1315,7 @@ static void note_toggled(bool on)
  * played like a press's. True if a press cut in. */
 static bool tap_turn(const char *message, const char *caption)
 {
+    muse_react_drop_waiting();   /* as a talk press does: the user moved on */
     if (!muse_hatch_ready()) {
         go_idle(not_ready_reason());
         return false;
