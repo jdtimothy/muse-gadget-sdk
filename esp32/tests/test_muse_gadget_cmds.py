@@ -375,6 +375,19 @@ class MuseGadgetCmdsSourceTest(unittest.TestCase):
         # Petting the character still does it.
         self.assertIn("muse_state_make_happy", (ROOT / "components/muse/muse_ui.c").read_text())
 
+    def test_a_tap_drops_a_waiting_reaction(self):
+        voice = (ROOT / "components/muse/muse_voice.c").read_text()
+        tap = voice[voice.index("static bool tap_turn("):]
+        self.assertIn("muse_react_drop_waiting();", tap[:tap.index("\n}\n")])
+        self.assertIn('#include "muse_gadget_react.h"', voice)
+
+    def test_a_finished_sound_restarts_the_sleep_clock(self):
+        play = (ROOT / "components/muse/muse_gadget_play.c").read_text()
+        idles = play.count("muse_state_set_mode(MUSE_MODE_IDLE);")
+        self.assertGreater(idles, 0)
+        poked = re.findall(r"muse_state_poke\(\);[^\n]*\n\s*muse_state_set_mode\(MUSE_MODE_IDLE\);", play)
+        self.assertEqual(len(poked), idles)
+
     def test_reactions_wait_out_a_turn(self):
         react = (ROOT / "components/muse/muse_gadget_react.c").read_text()
         self.assertIn("muse_react_wait_step(mode == MUSE_MODE_LISTENING, held,", react)

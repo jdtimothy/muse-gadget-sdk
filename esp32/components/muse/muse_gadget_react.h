@@ -34,6 +34,9 @@ void muse_react_media(const char *state, bool press);
  * reactions never mix with talking. MUSE_REACT_NONE clears. Any task. */
 bool muse_react_set(int id, int seconds);
 
+/* Forgets a reaction waiting for its turn to end: the user moved on. Any task. */
+void muse_react_drop_waiting(void);
+
 /* For a frame: the reaction showing (0 if none), with its seconds in and its
  * strength (muse_reaction_amount). */
 int muse_react_pose(float *t, float *amount);
