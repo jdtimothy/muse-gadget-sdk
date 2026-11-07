@@ -19,7 +19,8 @@
  * Spoken replies through ElevenLabs (CONFIG_MUSE_TTS_ELEVENLABS_API_KEY).
  * One fetch at a time, on a task of its own: start one with the reply's text,
  * then read its MP3 as it streams in. The voice session (start_tts in
- * muse_chat_session.cpp) is the only caller.
+ * muse_chat_session.cpp) and the gadget's sound player (muse_gadget_play.c)
+ * call it; muse_tts_start() gives one of them the fetch at a time.
  */
 
 #include <stdbool.h>
@@ -47,6 +48,11 @@ size_t muse_tts_read(uint32_t job, uint8_t *dst, size_t cap, bool *ended, bool *
 
 /* Stops the current fetch. */
 void muse_tts_cancel(void);
+
+/* Google Trust Services' roots as PEM, for any host that sends GTS Root R1
+ * cross-signed by the retired GlobalSign Root CA, which IDF's certificate
+ * bundle then refuses (see GTS_ROOTS_PEM in muse_tts_elevenlabs.c). */
+const char *muse_tts_google_roots(void);
 
 #define MUSE_TTS_VOICE_ID_MAX 32
 #define MUSE_TTS_VOICE_NAME_MAX 64
