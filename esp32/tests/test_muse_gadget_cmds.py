@@ -170,6 +170,63 @@ class MuseGadgetCmdsSourceTest(unittest.TestCase):
             for call in re.findall(r"ESP_LOG\w\(.*?\);", source, re.S):
                 self.assertNotIn("API_KEY", call, f"{path}: {call}")
 
+    def test_options_are_advertised_dispatched_and_built(self):
+        source = SOURCE.read_text()
+        add = source[source.index("void muse_gadget_add_commands("):]
+        block = add[add.index("#if CONFIG_MUSE_HATCH"):]
+        self.assertIn('"display.options"', block[:block.index("#endif")])
+        body = source[source.index("cJSON *muse_gadget_command("):]
+        self.assertIn("options_command(params)", body[:body.index("\n}\n")])
+        cmake = (ROOT / "components/muse/CMakeLists.txt").read_text()
+        self.assertIn('"muse_gadget_options.c"', cmake)
+
+    def test_buttons_draw_showable_text_and_send_the_original(self):
+        # Review fix: unscii-16 has no curly quotes; a tap still sends Muse its own words.
+        opts = (ROOT / "components/muse/muse_gadget_options.c").read_text()
+        build = opts[opts.index("static void build("):]
+        self.assertIn("muse_text_showable(", build[:build.index("\n}\n")])
+        tap = opts[opts.index("static void on_tap("):]
+        tap = tap[:tap.index("\n}\n")]
+        self.assertIn("s_shown_labels[i]", tap)
+        self.assertNotIn("lv_label_get_text", tap)
+        frame = opts[opts.index("bool muse_options_frame("):]
+        self.assertIn("muse_options_step(", frame)
+
+    def test_ui_shows_options(self):
+        ui = (ROOT / "components/muse/muse_ui.c").read_text()
+        self.assertIn('#include "muse_gadget_options.h"', ui)
+        self.assertRegex(ui, r"if \(muse_options_frame\(lv_obj_get_parent\(s_reply_lbl\), opt->top, opt->h, s_w - 32\)\) \{\s*\n\s*answer = ANSWER_READ;")
+        click = ui[ui.index("static void on_canvas_clicked("):]
+        self.assertIn("muse_options_showing()", click[:click.index("\n}\n")])
+
+    def test_tap_turn_in_the_chat_session(self):
+        chat_h = (ROOT / "components/muse/muse_chat.h").read_text()
+        self.assertIn("bool muse_hatch_tap_turn(const char *message, const char *caption);", chat_h)
+        session = (ROOT / "components/muse/muse_chat_session.cpp").read_text()
+        self.assertIn("CMD_TAP", session)
+        tap = session[session.index("static void tap_begin("):]
+        tap = tap[:tap.index("\n}\n")]
+        self.assertIn("turn_start(gen, false)", tap)        # spoken, like a voice turn
+        self.assertIn("emit(MUSE_HATCH_EV_HEARD, caption)", tap)
+        self.assertIn('send_chat(message, "text")', tap)
+        self.assertIn("if (!s_turn.tap) {", session)          # no "note sent" caption for a tap
+
+    def test_voice_task_takes_taps(self):
+        voice = (ROOT / "components/muse/muse_voice.c").read_text()
+        self.assertIn('#include "muse_gadget_options.h"', voice)
+        self.assertRegex(voice, r"static bool tap_turn\(const char \*message, const char \*caption\)")
+        hook = re.search(r"if \(muse_options_take_tap\(message, sizeof\(message\), label, sizeof\(label\)\)\) \{\s*\n"
+                         r"\s*muse_wifi_power\(MUSE_WIFI_FULL\);\s*\n\s*pending_down = tap_turn\(message, label\);", voice)
+        self.assertIsNotNone(hook, "voice_task() lacks the tap hook")
+        self.assertLess(voice.index("pending_down = tap_turn(message, label);"),
+                        voice.index("/* The 20 ms read paces this loop. */"))
+
+    def test_animation_is_metas(self):
+        pixel = (ROOT / "avatar/muse_pixel.c").read_text(encoding="utf-8")
+        self.assertNotIn("react_", pixel)
+        self.assertFalse((ROOT / "components/muse/muse_reactions.h").exists())
+        self.assertNotIn("avatar.react", SOURCE.read_text())
+
     def test_voice_and_sound_commands_need_spoken_replies(self):
         source = SOURCE.read_text()
         add = source[source.index("void muse_gadget_add_commands("):]
