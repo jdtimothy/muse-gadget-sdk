@@ -50,6 +50,8 @@ static const char *TAG = "board";
 #define PMU_KEY_EVERY 2         /* poll the PMU over I2C every 20 ms */
 #define DRAW_BUF_LINES 112      /* four bands to the screen (muse_lcd_bands.h) */
 #define LCD_CHUNK_BYTES (BSP_LCD_H_RES * 8 * 2)
+#define PAUSE_WAIT_MS 1000      /* the worker acks within one LVGL timer pass */
+#define PAUSE_TRIES 3
 #define EXIO_RESET (IO_EXPANDER_PIN_NUM_0 | IO_EXPANDER_PIN_NUM_1 | IO_EXPANDER_PIN_NUM_2)
 
 static esp_lcd_panel_io_handle_t s_io;
@@ -178,10 +180,26 @@ static void panel_sleep(bool sleep)
  * line is on the expander with the panel's. */
 static void display_pause(bool pause)
 {
-    if (pause) {
-        esp_lv_adapter_pause(-1);
-    } else {
+    if (!pause) {
         esp_lv_adapter_resume();
+        return;
+    }
+    /* esp_lv_adapter_pause() (0.6.4) can lose the worker's ack: the worker
+     * can see "paused" and ack before pause() clears the semaphore it then
+     * waits on. Waiting forever froze the screen and the buttons after hours
+     * on battery, with the worker asleep until a resume that never came. So
+     * wait a while, and on a timeout (which clears "paused") wake the worker
+     * and try again. */
+    for (int tries = 1; esp_lv_adapter_pause(PAUSE_WAIT_MS) == ESP_ERR_TIMEOUT; tries++) {
+        TaskHandle_t lvgl = xTaskGetHandle("lvgl");
+        if (lvgl) {
+            xTaskNotifyGive(lvgl);
+        }
+        if (tries == PAUSE_TRIES) {
+            ESP_LOGE(TAG, "display pause: no ack from the UI task after %d tries, left running", tries);
+            return;
+        }
+        ESP_LOGW(TAG, "display pause: no ack from the UI task (try %d), waking it", tries);
     }
 }
 
