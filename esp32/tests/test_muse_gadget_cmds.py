@@ -335,11 +335,43 @@ class MuseGadgetCmdsSourceTest(unittest.TestCase):
         overlay = (ROOT / "devices/sdkconfig.muse-waveshare-s3-18").read_text()
         self.assertIn("CONFIG_MUSE_STATIC_BUFFERS_IN_PSRAM=y", overlay)
 
-    def test_animation_is_metas(self):
-        pixel = (ROOT / "avatar/muse_pixel.c").read_text(encoding="utf-8")
-        self.assertNotIn("react_", pixel)
-        self.assertFalse((ROOT / "components/muse/muse_reactions.h").exists())
-        self.assertNotIn("avatar.react", SOURCE.read_text())
+    def test_idle_scenes_and_dance_are_run(self):
+        react = (ROOT / "components/muse/muse_gadget_react.c").read_text()
+        pose = react[react.index("int muse_react_pose("):]
+        self.assertIn("idle_frame();", pose[:pose.index("\n}\n")])
+        frame = react[react.index("static void idle_frame("):]
+        frame = frame[:frame.index("\n}\n")]
+        self.assertIn("muse_idle_step(", frame)
+        self.assertIn("muse_idle_doze_after(muse_settings_sleep_s())", frame)
+        self.assertIn("muse_options_showing()", frame)                 # Review Focus 4
+        self.assertIn("muse_state_happiness()", frame)
+        self.assertIn("now - s_last_frame", frame)                     # Review Focus 2
+        dance = react[react.index("static void start_dance("):]
+        dance = dance[:dance.index("\n}\n")]
+        self.assertNotIn("s_start_us = ", dance)          # Review Focus 3: dancing, it only extends
+        self.assertIn("s_secs = elapsed + secs;", dance)
+        h = (ROOT / "components/muse/muse_gadget_react.h").read_text()
+        self.assertIn("void muse_react_media(const char *state, bool press);", h)
+        media = (ROOT / "components/muse/muse_gadget_media.c").read_text()
+        update = media[media.index("muse_np_art_t muse_media_update("):]
+        self.assertIn("muse_react_media(f->state, false);", update[:update.index("\n}\n")])
+        press = media[media.index("static void press("):]
+        self.assertIn("muse_react_media(NULL, true);", press[:press.index("\n}\n")])
+
+    def test_react_is_advertised_and_dispatched_without_spoken_replies(self):
+        source = SOURCE.read_text()
+        add = source[source.index("void muse_gadget_add_commands("):]
+        add = add[:add.index("#if CONFIG_MUSE_HATCH")]
+        self.assertIn('"avatar.react"', add)
+        body = source[source.index("cJSON *muse_gadget_command("):]
+        body = body[:body.index("#if CONFIG_MUSE_HATCH")]
+        self.assertIn('"avatar.react"', body)
+        self.assertIn("react_command(params)", body)
+
+    def test_reactions_wait_out_a_turn(self):
+        react = (ROOT / "components/muse/muse_gadget_react.c").read_text()
+        self.assertIn("muse_react_wait_step(mode == MUSE_MODE_LISTENING, held,", react)
+        self.assertIn("muse_play_pending()", react)
 
     def test_voice_and_sound_commands_need_spoken_replies(self):
         source = SOURCE.read_text()

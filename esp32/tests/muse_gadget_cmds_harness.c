@@ -24,6 +24,8 @@
 
 #include "cJSON.h"
 #include "muse_gadget_sound.h"
+#include "muse_avatar_idle.h"
+#include "muse_reactions.h"
 #include "muse_reply_options.h"
 #include "muse_now_playing.h"
 #include "gadget_pure.inc"
@@ -502,6 +504,123 @@ static void test_hello_text(void)
     CHECK(valid_utf8(small));
 }
 
+/* parse_react on parsed JSON. */
+static bool react(const char *json, int *id, int *secs, char *err)
+{
+    cJSON *p = NULL;
+    if (json) {
+        p = cJSON_Parse(json);
+        if (!p) {
+            fprintf(stderr, "bad test JSON: %s\n", json);
+            exit(2);
+        }
+    }
+    err[0] = '\0';
+    bool ok = parse_react(p, id, secs, err, 256);
+    cJSON_Delete(p);
+    return ok;
+}
+
+static void test_parse_react(void)
+{
+    int id, secs;
+    char err[256];
+    CHECK(react("{\"name\":\"rainy\"}", &id, &secs, err) && id == MUSE_REACT_RAINY && secs == 4);
+    CHECK(react("{\"name\":\"Rainy\",\"seconds\":10}", &id, &secs, err) && id == MUSE_REACT_RAINY && secs == 10);
+    CHECK(react("{\"name\":\"none\"}", &id, &secs, err) && id == MUSE_REACT_NONE);
+    for (int i = 1; i < MUSE_REACT_COUNT; i++) {
+        char j[64];
+        snprintf(j, sizeof(j), "{\"name\":\"%s\"}", MUSE_REACTION_NAMES[i]);
+        CHECK(react(j, &id, &secs, err) && id == i);
+    }
+    CHECK(react("{\"name\":\"love\",\"seconds\":1}", &id, &secs, err) && secs == 1);
+    CHECK(react("{\"name\":\"love\",\"seconds\":30}", &id, &secs, err) && secs == 30);
+    CHECK(!react("{\"name\":\"love\",\"seconds\":0}", &id, &secs, err) && strstr(err, "seconds"));
+    CHECK(!react("{\"name\":\"love\",\"seconds\":31}", &id, &secs, err) && strstr(err, "30"));
+    CHECK(!react("{\"name\":\"love\",\"seconds\":2.5}", &id, &secs, err));
+    CHECK(!react("{\"name\":\"love\",\"seconds\":\"5\"}", &id, &secs, err));
+    CHECK(!react("{\"name\":\"dance\"}", &id, &secs, err) && strstr(err, "love") && strstr(err, "rainbow") &&
+          strstr(err, "none"));
+    CHECK(!react("{\"name\":5}", &id, &secs, err) && strstr(err, "name"));
+    CHECK(!react("{}", &id, &secs, err) && strstr(err, "name"));
+    CHECK(!react(NULL, &id, &secs, err) && strstr(err, "name"));
+    /* A misspelled parameter is refused, not ignored. */
+    CHECK(!react("{\"name\":\"love\",\"secs\":3}", &id, &secs, err) && strstr(err, "secs"));
+}
+
+static void test_reaction_names(void)
+{
+    CHECK(MUSE_REACT_COUNT == 22);
+    CHECK(!strcmp(MUSE_REACTION_NAMES[MUSE_REACT_NONE], "none"));
+    for (int i = 1; i < MUSE_REACT_COUNT; i++) {
+        CHECK(strstr(MUSE_REACTION_NAMES_TEXT, MUSE_REACTION_NAMES[i]) != NULL);
+        CHECK(muse_reaction_find(MUSE_REACTION_NAMES[i]) == i);
+    }
+    CHECK(muse_reaction_find("NONE") == MUSE_REACT_NONE);
+    CHECK(muse_reaction_find("dance") == -1);
+}
+
+static bool near(float a, float b)
+{
+    return a > b - 0.001f && a < b + 0.001f;
+}
+
+static void test_reaction_amount(void)
+{
+    CHECK(near(muse_reaction_amount(-0.1f, 4), 0));
+    CHECK(near(muse_reaction_amount(0, 4), 0));
+    CHECK(near(muse_reaction_amount(0.125f, 4), 0.5f));   /* half way in */
+    CHECK(near(muse_reaction_amount(1, 4), 1));
+    CHECK(near(muse_reaction_amount(3.8f, 4), 0.5f));     /* half way out */
+    CHECK(near(muse_reaction_amount(4, 4), 0));
+    CHECK(near(muse_reaction_amount(9, 4), 0));
+    CHECK(muse_reaction_amount(0.5f, 1) > 0.99f);         /* a 1 s reaction still reaches full */
+}
+
+static void test_react_result(void)
+{
+    cJSON *r = react_result(MUSE_REACT_RAINY, 4, false);
+    cJSON *p = cJSON_GetObjectItem(r, "payload");
+    CHECK(cJSON_IsTrue(cJSON_GetObjectItem(r, "ok")));
+    CHECK(!strcmp(cJSON_GetObjectItem(p, "reaction")->valuestring, "rainy"));
+    CHECK(cJSON_GetObjectItem(p, "seconds")->valueint == 4);
+    cJSON_Delete(r);
+    r = react_result(MUSE_REACT_NONE, 4, false);
+    p = cJSON_GetObjectItem(r, "payload");
+    CHECK(!strcmp(cJSON_GetObjectItem(p, "reaction")->valuestring, "none"));
+    CHECK(!cJSON_GetObjectItem(p, "seconds"));
+    cJSON_Delete(r);
+}
+
+/* A reaction waits out a turn and plays once the avatar has settled in idle. */
+static void test_react_wait_step(void)
+{
+    /* Thinking or speaking: it waits. */
+    CHECK(muse_react_wait_step(false, true, 0, 5) == MUSE_REACT_WAIT_HOLD);
+    /* Speech just ended: idle, but not yet settled. */
+    CHECK(muse_react_wait_step(false, false, MUSE_REACT_SETTLE_S - 0.1f, 5) == MUSE_REACT_WAIT_HOLD);
+    /* Settled: it plays. */
+    CHECK(muse_react_wait_step(false, false, MUSE_REACT_SETTLE_S, 5) == MUSE_REACT_WAIT_START);
+    /* A talk press drops it, whatever else is true. */
+    CHECK(muse_react_wait_step(true, true, 0, 5) == MUSE_REACT_WAIT_DROP);
+    CHECK(muse_react_wait_step(true, false, 9, 5) == MUSE_REACT_WAIT_DROP);
+    /* Too old to belong to anything still on screen. */
+    CHECK(muse_react_wait_step(false, true, 0, MUSE_REACT_WAIT_MAX_S) == MUSE_REACT_WAIT_DROP);
+    CHECK(muse_react_wait_step(false, false, 9, MUSE_REACT_WAIT_MAX_S + 1) == MUSE_REACT_WAIT_DROP);
+}
+
+static void test_react_result_says_it_waits(void)
+{
+    cJSON *r = react_result(MUSE_REACT_RAINY, 4, true);
+    cJSON *p = cJSON_GetObjectItem(r, "payload");
+    CHECK(cJSON_IsTrue(cJSON_GetObjectItem(p, "waiting")));
+    cJSON_Delete(r);
+    r = react_result(MUSE_REACT_RAINY, 4, false);
+    p = cJSON_GetObjectItem(r, "payload");
+    CHECK(!cJSON_GetObjectItem(p, "waiting"));
+    cJSON_Delete(r);
+}
+
 /* parse_options on parsed JSON. */
 static bool options(const char *json, char labels[][MUSE_OPTIONS_LABEL_MAX + 1], int *n, char *err)
 {
@@ -760,6 +879,62 @@ static void test_media_result(void)
     }
 }
 
+/* The six built-in animations: named, timed, and not Muse's to call. */
+static void test_activity_ids(void)
+{
+    CHECK((int)MUSE_ACT_DANCE == (int)MUSE_REACT_COUNT && (int)MUSE_ANIM_COUNT == (int)MUSE_REACT_COUNT + 6);
+    CHECK(!strcmp(muse_anim_name(MUSE_ACT_DANCE), "dance") && !strcmp(muse_anim_name(MUSE_ACT_PACE), "pace"));
+    CHECK(!strcmp(muse_anim_name(MUSE_REACT_LOVE), "love"));
+    CHECK(muse_act_secs(MUSE_ACT_DANCE) == 30.0f && muse_act_secs(MUSE_ACT_STRETCH) == 3.0f);
+    CHECK(muse_act_secs(MUSE_ACT_HUM) == 5.0f && muse_act_secs(MUSE_ACT_DOZE) == 6.0f);
+    static const char *const MINE[] = { "dance", "stretch", "hum", "butterfly", "doze", "pace" };
+    for (int i = 0; i < 6; i++) {
+        CHECK(muse_reaction_find(MINE[i]) == -1);   /* avatar.react refuses them */
+    }
+}
+
+static void test_idle_picker(void)
+{
+    muse_idle_t s = { 0 };
+    /* First frame: waits a gap, even calm. */
+    CHECK(muse_idle_step(&s, 100, true, 1000, 300, 7) == 0 && s.next_at >= 110 && s.next_at <= 130);
+    float due = s.next_at;
+    CHECK(muse_idle_step(&s, due - 0.1f, true, 1000, 300, 7) == 0);
+    int a = muse_idle_step(&s, due, true, 1000, 300, 12345);
+    CHECK(a >= MUSE_ACT_STRETCH && a <= MUSE_ACT_PACE);
+    /* Never the same twice running, and the gap counts after it ends. */
+    for (uint32_t r = 0; r < 200; r++) {
+        int prev = s.last;
+        int b = muse_idle_step(&s, s.next_at, true, 1000, 300, r * 2654435761u);
+        CHECK(b && b != prev && b != MUSE_ACT_DANCE);
+    }
+    /* Doze only after the quiet spell. */
+    for (uint32_t r = 0; r < 200; r++) {
+        CHECK(muse_idle_step(&s, s.next_at, true, 299, 300, r * 2246822519u) != MUSE_ACT_DOZE);
+    }
+    bool dozed = false;
+    for (uint32_t r = 0; r < 200 && !dozed; r++) {
+        dozed = muse_idle_step(&s, s.next_at, true, 301, 300, r * 3266489917u) == MUSE_ACT_DOZE;
+    }
+    CHECK(dozed);
+    /* Anything not calm restarts the gap. */
+    float now = s.next_at;
+    CHECK(muse_idle_step(&s, now, false, 1000, 300, 99) == 0 && s.next_at >= now + 10 && s.next_at <= now + 30);
+    CHECK(muse_idle_gap(0) == MUSE_IDLE_GAP_MIN && muse_idle_gap(1000) == MUSE_IDLE_GAP_MAX);
+    /* Review Focus 1: doze before the screen sleeps. */
+    CHECK(muse_idle_doze_after(0) == 300 && muse_idle_doze_after(600) == 300);
+    CHECK(muse_idle_doze_after(120) == 100 && muse_idle_doze_after(30) == 10);
+}
+
+static void test_dance_rules(void)
+{
+    CHECK(muse_dance_on_media("playing", false) == MUSE_DANCE_START);
+    CHECK(muse_dance_on_media("paused", false) == MUSE_DANCE_STOP);
+    CHECK(muse_dance_on_media("idle", false) == MUSE_DANCE_STOP);
+    CHECK(muse_dance_on_media(NULL, false) == MUSE_DANCE_KEEP);   /* an update without a state */
+    CHECK(muse_dance_on_media(NULL, true) == MUSE_DANCE_START);   /* back, play/pause, skip */
+}
+
 int main(void)
 {
     test_parse_settings();
@@ -779,6 +954,15 @@ int main(void)
     test_chime_names();
     test_sound_results();
     test_hello_text();
+    test_parse_react();
+    test_reaction_names();
+    test_reaction_amount();
+    test_react_result();
+    test_react_wait_step();
+    test_react_result_says_it_waits();
+    test_activity_ids();
+    test_idle_picker();
+    test_dance_rules();
     test_parse_options();
     test_options_step();
     test_options_message();
