@@ -24,6 +24,7 @@
  *   audio.play_url   play an MP3 clip
  *   audio.chime      play a built-in chime
  *                    (all three queued for muse_gadget_play.c)
+ *   display.options  reply buttons after the spoken reply (muse_gadget_options.c)
  * skills/gadget-muse-s318/SKILL.md tells Muse when to use each.
  *
  * Everything from "Pure (host-tested)" to "Device" builds on the host
@@ -44,6 +45,7 @@
 
 #include "cJSON.h"
 #include "muse_gadget_sound.h"
+#include "muse_reply_options.h"
 
 /* ---- Pure (host-tested) ---- */
 
@@ -678,6 +680,92 @@ static void hello_text(char *out, size_t cap, const char *name)
     utf8_trim(out);
 }
 
+/*
+ * Checks display.options' {options: [2-4 labels]} into labels: each 1-24
+ * bytes, not all spaces, no control characters. A bad or unknown parameter is
+ * refused, saying why in err.
+ */
+static bool parse_options(const cJSON *params, char labels[][MUSE_OPTIONS_LABEL_MAX + 1], int *n, char *err,
+                          size_t cap)
+{
+    *n = 0;
+    const cJSON *list = NULL;
+    if (cJSON_IsObject(params)) {
+        const cJSON *v;
+        cJSON_ArrayForEach(v, params) {
+            if (strcmp(v->string, "options")) {
+                char name[41];
+                snprintf(name, sizeof(name), "%.40s", v->string);
+                utf8_trim(name);
+                snprintf(err, cap, "unknown parameter %s: use options", name);
+                return false;
+            }
+            list = v;
+        }
+    }
+    if (!list) {
+        snprintf(err, cap, "options is required: %d to %d short replies", MUSE_OPTIONS_MIN, MUSE_OPTIONS_MAX);
+        return false;
+    }
+    /* A tool layer may send the list as a JSON string: read that as the list. */
+    cJSON *parsed = cJSON_IsString(list) ? cJSON_Parse(list->valuestring) : NULL;
+    if (cJSON_IsArray(parsed)) {
+        list = parsed;
+    }
+    bool ok = parse_option_list(list, labels, n, err, cap);
+    cJSON_Delete(parsed);
+    return ok;
+}
+
+/* The list part of parse_options(). */
+static bool parse_option_list(const cJSON *list, char labels[][MUSE_OPTIONS_LABEL_MAX + 1], int *n, char *err,
+                              size_t cap)
+{
+    if (!cJSON_IsArray(list)) {
+        snprintf(err, cap, "options must be a list of %d to %d strings", MUSE_OPTIONS_MIN, MUSE_OPTIONS_MAX);
+        return false;
+    }
+    int count = cJSON_GetArraySize(list);
+    if (count < MUSE_OPTIONS_MIN || count > MUSE_OPTIONS_MAX) {
+        snprintf(err, cap, "options takes %d to %d replies", MUSE_OPTIONS_MIN, MUSE_OPTIONS_MAX);
+        return false;
+    }
+    const cJSON *item;
+    cJSON_ArrayForEach(item, list) {
+        if (!cJSON_IsString(item)) {
+            snprintf(err, cap, "each option must be a string");
+            return false;
+        }
+        const char *s = item->valuestring;
+        size_t len = strlen(s);
+        bool blank = true;
+        for (size_t i = 0; i < len; i++) {
+            unsigned char c = (unsigned char)s[i];
+            if (c < ' ' || c == 0x7f) {
+                snprintf(err, cap, "an option can't hold control characters or line breaks");
+                return false;
+            }
+            blank = blank && c == ' ';
+        }
+        if (!len || blank || len > MUSE_OPTIONS_LABEL_MAX) {
+            snprintf(err, cap, "each option must be 1 to %d characters", MUSE_OPTIONS_LABEL_MAX);
+            return false;
+        }
+        memcpy(labels[*n], s, len + 1);
+        (*n)++;
+    }
+    return true;
+}
+
+/* display.options' answer: how many buttons there will be. */
+static cJSON *options_result(int n)
+{
+    cJSON *p;
+    cJSON *result = gadget_ok(&p);
+    cJSON_AddNumberToObject(p, "shown", n);
+    return result;
+}
+
 /* ---- Device ---- */
 
 #include "esp_log.h"
@@ -690,6 +778,7 @@ static void hello_text(char *out, size_t cap, const char *name)
 #include "freertos/idf_additions.h"
 #include "freertos/task.h"
 #if CONFIG_MUSE_HATCH
+#include "muse_gadget_options.h"
 #include "muse_gadget_play.h"
 #include "muse_tts_elevenlabs.h"
 #endif
@@ -876,6 +965,19 @@ static cJSON *sound_command(const char *command, const cJSON *params)
     }
     return sound_result(muse_play_enqueue(s.kind, s.arg, s.caption));
 }
+
+/* display.options: shown once the gadget is idle, so nothing waits. */
+static cJSON *options_command(const cJSON *params)
+{
+    char labels[MUSE_OPTIONS_MAX][MUSE_OPTIONS_LABEL_MAX + 1];
+    int n;
+    char err[160];
+    if (!parse_options(params, labels, &n, err, sizeof(err))) {
+        return gadget_error("invalid_params", err);
+    }
+    muse_options_set(labels, n);
+    return options_result(n);
+}
 #endif
 
 static cJSON *param(const char *type, const char *description)
@@ -932,6 +1034,14 @@ void muse_gadget_add_commands(cJSON *commands)
                 one_param("url", "string", "https:// link to an MP3."), NULL);
     add_command(commands, "audio.chime", "Play a built-in chime. Queued.",
                 one_param("name", "string", MUSE_CHIME_NAMES "."), NULL);
+    cJSON *opts = param("array", "2-4 short replies, up to 24 characters each.");
+    cJSON *item = cJSON_CreateObject();
+    cJSON_AddStringToObject(item, "type", "string");
+    cJSON_AddItemToObject(opts, "items", item);
+    cJSON *oreq = cJSON_CreateObject();
+    cJSON_AddItemToObject(oreq, "options", opts);
+    add_command(commands, "display.options", "Show reply buttons after the spoken reply; a tap sends that reply.",
+                oreq, NULL);
 #endif
 }
 
@@ -947,6 +1057,9 @@ cJSON *muse_gadget_command(const char *command, cJSON *params, const char *reque
     }
     if (!strcmp(command, "voice.say") || !strcmp(command, "audio.play_url") || !strcmp(command, "audio.chime")) {
         return sound_command(command, params);
+    }
+    if (!strcmp(command, "display.options")) {
+        return options_command(params);
     }
 #else
     (void)request_id;
