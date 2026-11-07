@@ -328,6 +328,10 @@ class MuseGadgetCmdsSourceTest(unittest.TestCase):
         self.assertLess(voice.index("pending_down = tap_turn(message, label);"),
                         voice.index("/* The 20 ms read paces this loop. */"))
 
+    def test_s318_keeps_live_calls(self):
+        overlay = (ROOT / "devices/sdkconfig.muse-waveshare-s3-18").read_text()
+        self.assertIn("CONFIG_MUSE_REALTIME_VOICE=y", overlay)
+
     def test_s318_leaves_room_for_command_results(self):
         # noise_control sends a result only with 16 KB of DMA memory free
         # (NOISE_TX_DMA_RESERVE_BYTES); without this the board idles at 15 KB
