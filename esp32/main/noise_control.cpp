@@ -62,6 +62,9 @@ extern "C" {
 #include "muse_state.h"
 }
 #endif
+#if CONFIG_MUSE_GADGET_COMMANDS
+#include "muse_gadget_cmds.h"
+#endif
 }
 
 #include <xplat/noise/core/ClientSession.h>
@@ -1655,6 +1658,9 @@ static char *build_register_json(void) {
         cJSON_GetObjectItem(commands, "camera.capture"), "timeout_ms", 30000);
 #endif
 
+#if CONFIG_MUSE_GADGET_COMMANDS
+    muse_gadget_add_commands(commands);
+#endif
 #if CONFIG_HOMEHUB_BLE_COMMANDS
     ble_commands_register(commands);
 #endif
@@ -1676,6 +1682,9 @@ static char *build_register_json(void) {
         }
     }
     cJSON_Delete(root);
+#if CONFIG_MUSE_GADGET_COMMANDS
+    if (json) ESP_LOGI(TAG, "link.register: %u bytes", (unsigned)strlen(json));
+#endif
     return json;
 }
 
