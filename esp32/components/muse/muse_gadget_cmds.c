@@ -19,6 +19,7 @@
  * link.register and answered from on_ws_command() (main/app.c):
  *   device.settings  read or change volume, mute, brightness and screen
  *                    sleep; reports them with the battery and voice
+ *   avatar.react     show a reaction on the avatar for a few seconds
  *   voice.select     list the ElevenLabs voices, or switch to one (async)
  *   voice.say        say text aloud, captioned
  *   audio.play_url   play an MP3 clip
@@ -46,6 +47,7 @@
 
 #include "cJSON.h"
 #include "muse_gadget_sound.h"
+#include "muse_reactions.h"
 #include "muse_reply_options.h"
 #include "muse_now_playing.h"
 
@@ -689,6 +691,57 @@ static void hello_text(char *out, size_t cap, const char *name)
     utf8_trim(out);
 }
 
+/* Checks avatar.react's {name, seconds} into *id (MUSE_REACT_NONE clears) and
+ * *secs. A missing, wrong or unknown parameter is refused, saying why in err. */
+static bool parse_react(const cJSON *params, int *id, int *secs, char *err, size_t cap)
+{
+    *id = -1;
+    *secs = MUSE_REACT_SECS_DEFAULT;
+    if (cJSON_IsObject(params)) {
+        const cJSON *v;
+        cJSON_ArrayForEach(v, params) {
+            if (!strcmp(v->string, "name")) {
+                if (!cJSON_IsString(v) || (*id = muse_reaction_find(v->valuestring)) < 0) {
+                    snprintf(err, cap, "name must be " MUSE_REACTION_NAMES_TEXT ", or none to clear");
+                    return false;
+                }
+            } else if (!strcmp(v->string, "seconds")) {
+                if (!whole_in(v, 1, MUSE_REACT_SECS_MAX)) {
+                    snprintf(err, cap, "seconds must be a whole number from 1 to %d", MUSE_REACT_SECS_MAX);
+                    return false;
+                }
+                *secs = (int)v->valuedouble;
+            } else {
+                char name[41];
+                snprintf(name, sizeof(name), "%.40s", v->string);
+                utf8_trim(name);
+                snprintf(err, cap, "unknown parameter %s: use name and seconds", name);
+                return false;
+            }
+        }
+    }
+    if (*id < 0) {
+        snprintf(err, cap, "name is required: " MUSE_REACTION_NAMES_TEXT ", or none to clear");
+        return false;
+    }
+    return true;
+}
+
+/* avatar.react's answer: the reaction, for how long, and whether it waits for a turn to end. */
+static cJSON *react_result(int id, int secs, bool waiting)
+{
+    cJSON *p;
+    cJSON *result = gadget_ok(&p);
+    cJSON_AddStringToObject(p, "reaction", MUSE_REACTION_NAMES[id]);
+    if (id != MUSE_REACT_NONE) {
+        cJSON_AddNumberToObject(p, "seconds", secs);
+        if (waiting) {
+            cJSON_AddBoolToObject(p, "waiting", true);
+        }
+    }
+    return result;
+}
+
 static bool parse_option_list(const cJSON *list, char labels[][MUSE_OPTIONS_LABEL_MAX + 1], int *n, char *err,
                               size_t cap);
 
@@ -873,6 +926,7 @@ static cJSON *media_result(muse_np_art_t art)
 #include "muse_tts_elevenlabs.h"
 #endif
 
+#include "muse_gadget_react.h"
 #include "muse_settings.h"
 #include "muse_state.h"
 
@@ -886,6 +940,18 @@ static gadget_settings_t current_settings(void)
         .brightness = muse_settings_brightness(),
         .sleep_s = muse_settings_sleep_s(),
     };
+}
+
+/* avatar.react: plays now if the avatar is free, else once the turn ends. It answers at once. */
+static cJSON *react_command(const cJSON *params)
+{
+    int id, secs;
+    char err[256];
+    if (!parse_react(params, &id, &secs, err, sizeof(err))) {
+        return gadget_error("invalid_params", err);
+    }
+    bool playing = muse_react_set(id, secs);
+    return react_result(id, secs, !playing);
 }
 
 static cJSON *settings_command(const cJSON *params)
@@ -1122,6 +1188,9 @@ void muse_gadget_add_commands(cJSON *commands)
                 "Read or change volume, mute, brightness and screen sleep. "
                 "Reports them all, with the battery and voice.",
                 NULL, opt);
+    add_command(commands, "avatar.react", "Show a reaction on the avatar for a few seconds, after any reply in progress.",
+                one_param("name", "string", MUSE_REACTION_NAMES_TEXT ", or none to clear."),
+                one_param("seconds", "integer", "1-30, default 4."));
 #if CONFIG_MUSE_HATCH
     cJSON *vopt = cJSON_CreateObject();
     cJSON_AddItemToObject(vopt, "name", param("string", "Voice to switch to; without it, lists them."));
@@ -1162,6 +1231,9 @@ cJSON *muse_gadget_command(const char *command, cJSON *params, const char *reque
 {
     if (!strcmp(command, "device.settings")) {
         return settings_command(params);
+    }
+    if (!strcmp(command, "avatar.react")) {
+        return react_command(params);
     }
 #if CONFIG_MUSE_HATCH
     if (!strcmp(command, "voice.select")) {
