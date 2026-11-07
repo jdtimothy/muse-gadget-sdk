@@ -25,6 +25,7 @@
  *   audio.chime      play a built-in chime
  *                    (all three queued for muse_gadget_play.c)
  *   display.options  reply buttons after the spoken reply (muse_gadget_options.c)
+ *   media.update     the Now Playing tile's track and cover (muse_gadget_media.c)
  * skills/gadget-muse-s318/SKILL.md tells Muse when to use each.
  *
  * Everything from "Pure (host-tested)" to "Device" builds on the host
@@ -46,6 +47,7 @@
 #include "cJSON.h"
 #include "muse_gadget_sound.h"
 #include "muse_reply_options.h"
+#include "muse_now_playing.h"
 
 /* ---- Pure (host-tested) ---- */
 
@@ -520,15 +522,16 @@ typedef struct {
 } gadget_sound_t;
 
 /*
- * A URL the player can fetch: https://, characters RFC 3986 allows (anything
- * else percent-encoded), at most one user info, a host of letters, digits,
- * dots and hyphens, and a port of 1-65535 if any. ESP-IDF's URL parser logs
- * a URL it refuses in full, token and all, so nothing it would refuse gets
- * that far.
+ * A URL the gadget can fetch: https:// (or http:// if `http`), at most `max`
+ * bytes, characters RFC 3986 allows (anything else percent-encoded), at most
+ * one user info, a host of letters, digits, dots and hyphens, and a port of
+ * 1-65535 if any. ESP-IDF's URL parser logs a URL it refuses in full, token
+ * and all, so nothing it would refuse gets that far.
  */
-static bool usable_url(const char *url, size_t len)
+static bool url_ok(const char *url, size_t len, size_t max, bool http)
 {
-    if (len <= 8 || len > MUSE_SOUND_URL_MAX || strncasecmp(url, "https://", 8)) {
+    size_t scheme = !strncasecmp(url, "https://", 8) ? 8 : http && !strncasecmp(url, "http://", 7) ? 7 : 0;
+    if (!scheme || len <= scheme || len > max) {
         return false;
     }
     for (size_t i = 0; i < len; i++) {
@@ -537,7 +540,7 @@ static bool usable_url(const char *url, size_t len)
             return false;
         }
     }
-    const char *host = url + 8;
+    const char *host = url + scheme;
     size_t n = strcspn(host, "/?#");   /* user info, host and port */
     const char *at = memchr(host, '@', n);
     if (at) {
@@ -574,6 +577,12 @@ static bool usable_url(const char *url, size_t len)
         }
     }
     return true;
+}
+
+/* audio.play_url's URL: https only. */
+static bool usable_url(const char *url, size_t len)
+{
+    return url_ok(url, len, MUSE_SOUND_URL_MAX, false);
 }
 
 /*
@@ -766,6 +775,83 @@ static cJSON *options_result(int n)
     return result;
 }
 
+/*
+ * Checks media.update's fields into *f (pointers into params; NULL when not
+ * sent or null, except a null art_url, which is ""). All are optional
+ * strings: state is playing, paused or idle; player_id
+ * 1-64 bytes of printable ASCII; art_url empty (no art) or an http:// or
+ * https:// address of at most 512 bytes. A bad or unknown parameter is
+ * refused, saying why in err.
+ */
+static bool parse_media(const cJSON *params, muse_np_fields_t *f, char *err, size_t cap)
+{
+    static const char *const names[] = { "player", "title", "artist", "album", "state", "player_id", "art_url" };
+    const char **slots[] = { &f->player, &f->title, &f->artist, &f->album, &f->state, &f->player_id, &f->art_url };
+    const int count = (int)(sizeof(names) / sizeof(names[0]));
+    memset(f, 0, sizeof(*f));
+    if (!cJSON_IsObject(params)) {
+        return true;   /* nothing to change */
+    }
+    const cJSON *v;
+    cJSON_ArrayForEach(v, params) {
+        int k = 0;
+        while (k < count && strcmp(v->string, names[k])) {
+            k++;
+        }
+        if (k == count) {
+            char name[41];
+            snprintf(name, sizeof(name), "%.40s", v->string);
+            utf8_trim(name);
+            snprintf(err, cap, "unknown parameter %s: use player, title, artist, album, state, player_id and art_url",
+                     name);
+            return false;
+        }
+        if (cJSON_IsNull(v)) {
+            /* The bridge's null for what a track lacks: not sent, but a null cover clears it. */
+            if (slots[k] == &f->art_url) {
+                f->art_url = "";
+            }
+            continue;
+        }
+        if (!cJSON_IsString(v)) {
+            snprintf(err, cap, "%s must be a string", names[k]);
+            return false;
+        }
+        *slots[k] = v->valuestring;
+    }
+    if (f->state && strcmp(f->state, "playing") && strcmp(f->state, "paused") && strcmp(f->state, "idle")) {
+        snprintf(err, cap, "state must be playing, paused or idle");
+        return false;
+    }
+    if (f->player_id) {
+        size_t n = strlen(f->player_id);
+        bool ok = n >= 1 && n <= MUSE_NP_PLAYER_ID_MAX;
+        for (size_t i = 0; ok && i < n; i++) {
+            ok = f->player_id[i] >= ' ' && f->player_id[i] <= '~';
+        }
+        if (!ok) {
+            snprintf(err, cap, "player_id must be 1 to %d characters of plain ASCII, as ma.now_playing gives it",
+                     MUSE_NP_PLAYER_ID_MAX);
+            return false;
+        }
+    }
+    if (f->art_url && f->art_url[0] && !url_ok(f->art_url, strlen(f->art_url), MUSE_NP_ART_URL_MAX, true)) {
+        snprintf(err, cap, "art_url must be empty or an http:// or https:// address of at most %d bytes, without spaces",
+                 MUSE_NP_ART_URL_MAX);
+        return false;
+    }
+    return true;
+}
+
+/* media.update's answer: what happened to the art. */
+static cJSON *media_result(muse_np_art_t art)
+{
+    cJSON *p;
+    cJSON *result = gadget_ok(&p);
+    cJSON_AddStringToObject(p, "art", muse_np_art_name(art));
+    return result;
+}
+
 /* ---- Device ---- */
 
 #include "esp_log.h"
@@ -778,6 +864,7 @@ static cJSON *options_result(int n)
 #include "freertos/idf_additions.h"
 #include "freertos/task.h"
 #if CONFIG_MUSE_HATCH
+#include "muse_gadget_media.h"
 #include "muse_gadget_options.h"
 #include "muse_gadget_play.h"
 #include "muse_tts_elevenlabs.h"
@@ -978,6 +1065,17 @@ static cJSON *options_command(const cJSON *params)
     muse_options_set(labels, n);
     return options_result(n);
 }
+
+/* media.update: the tile's text at once, its cover in the background. */
+static cJSON *media_command(const cJSON *params)
+{
+    muse_np_fields_t f;
+    char err[160];
+    if (!parse_media(params, &f, err, sizeof(err))) {
+        return gadget_error("invalid_params", err);
+    }
+    return media_result(muse_media_update(&f));
+}
 #endif
 
 static cJSON *param(const char *type, const char *description)
@@ -1042,6 +1140,17 @@ void muse_gadget_add_commands(cJSON *commands)
     cJSON_AddItemToObject(oreq, "options", opts);
     add_command(commands, "display.options", "Show reply buttons after the spoken reply; a tap sends that reply.",
                 oreq, NULL);
+    cJSON *mopt = cJSON_CreateObject();
+    cJSON_AddItemToObject(mopt, "player", param("string", "Player name, e.g. Kitchen."));
+    cJSON_AddItemToObject(mopt, "title", param("string", "Track title."));
+    cJSON_AddItemToObject(mopt, "artist", param("string", "Artist name."));
+    cJSON_AddItemToObject(mopt, "album", param("string", "Album name."));
+    cJSON_AddItemToObject(mopt, "state", param("string", "playing, paused or idle."));
+    cJSON_AddItemToObject(mopt, "player_id", param("string", "Music Assistant player id; presses send it back."));
+    cJSON_AddItemToObject(mopt, "art_url", param("string", "Cover JPEG, http(s); empty clears."));
+    add_command(commands, "media.update",
+                "Update the Now Playing tile (left of the avatar). Its presses come back as messages.",
+                NULL, mopt);
 #endif
 }
 
@@ -1060,6 +1169,9 @@ cJSON *muse_gadget_command(const char *command, cJSON *params, const char *reque
     }
     if (!strcmp(command, "display.options")) {
         return options_command(params);
+    }
+    if (!strcmp(command, "media.update")) {
+        return media_command(params);
     }
 #else
     (void)request_id;

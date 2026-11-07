@@ -25,6 +25,7 @@
 #include "cJSON.h"
 #include "muse_gadget_sound.h"
 #include "muse_reply_options.h"
+#include "muse_now_playing.h"
 #include "gadget_pure.inc"
 
 static int failures;
@@ -575,6 +576,190 @@ static void test_options_message(void)
     cJSON_Delete(r);
 }
 
+static void test_np_message(void)
+{
+    char out[MUSE_NP_MSG_MAX];
+    muse_np_message(out, sizeof(out), MUSE_NP_NEXT, "ap1234");
+    CHECK(!strcmp(out, "next [pressed on the gadget's Now Playing tile; player_id: ap1234]"));
+    /* Review Focus 1: no player id stored yet (an older skill sends none). */
+    muse_np_message(out, sizeof(out), MUSE_NP_REFRESH, NULL);
+    CHECK(!strcmp(out, "refresh [pressed on the gadget's Now Playing tile]"));
+    muse_np_message(out, sizeof(out), MUSE_NP_PLAY_PAUSE, "");
+    CHECK(!strcmp(out, "play_pause [pressed on the gadget's Now Playing tile]"));
+    /* The longest id still fits whole. */
+    char id[MUSE_NP_PLAYER_ID_MAX + 1];
+    memset(id, 'x', MUSE_NP_PLAYER_ID_MAX);
+    id[MUSE_NP_PLAYER_ID_MAX] = '\0';
+    muse_np_message(out, sizeof(out), MUSE_NP_PLAY_PAUSE, id);
+    CHECK(strlen(out) == strlen("play_pause") + strlen(MUSE_NP_TAG) + strlen("; player_id: ") + MUSE_NP_PLAYER_ID_MAX + 1);
+    CHECK(out[strlen(out) - 1] == ']');
+    CHECK(!strcmp(muse_np_action_name(MUSE_NP_PREVIOUS), "previous"));
+    CHECK(!strcmp(muse_np_art_name(MUSE_NP_ART_UNCHANGED), "unchanged"));
+}
+
+static void test_np_art_scale(void)
+{
+    CHECK(muse_np_art_scale(448, 448, 368, 448) == 0);
+    CHECK(muse_np_art_scale(1000, 1000, 368, 448) == 1);   /* 500 still covers, 250 doesn't */
+    CHECK(muse_np_art_scale(1800, 1800, 368, 448) == 2);   /* 450 */
+    CHECK(muse_np_art_scale(4000, 4000, 368, 448) == 3);   /* 500 at 1/8, the decoder's smallest */
+    CHECK(muse_np_art_scale(300, 300, 368, 448) == 0);     /* too small: scaled up after */
+    CHECK(muse_np_art_scale(1500, 600, 368, 448) == 0);    /* halving loses the height */
+}
+
+/* The decoded pixel the tile's (x, y) shows. */
+static int fit_x(muse_np_fit_t f, int x)
+{
+    return (int)((f.ox + (uint32_t)x * f.step) >> 16);
+}
+
+static int fit_y(muse_np_fit_t f, int y)
+{
+    return (int)((f.oy + (uint32_t)y * f.step) >> 16);
+}
+
+static void test_np_art_fit(void)
+{
+    /* A 448 square on the 368x448 tile: 1:1, cropped 40 px each side. */
+    muse_np_fit_t f = muse_np_art_fit(448, 448, 368, 448);
+    CHECK(f.step == 65536 && fit_x(f, 0) == 40 && fit_x(f, 367) == 407 && fit_y(f, 0) == 0 && fit_y(f, 447) == 447);
+    /* 500x500 (a 1000 px cover at 1/2): scaled down to the tile's height, so
+     * only the sides are cropped (review fix: 1:1 cut a quarter of a cover off). */
+    f = muse_np_art_fit(500, 500, 368, 448);
+    CHECK(f.step > 65536 && fit_y(f, 0) == 0 && fit_y(f, 447) >= 498 && fit_x(f, 0) == 44);
+    /* Music Assistant's 512 px covers: the whole height shows, 420 of 512 across. */
+    f = muse_np_art_fit(512, 512, 368, 448);
+    CHECK(fit_y(f, 0) == 0 && fit_y(f, 447) >= 510 && fit_x(f, 0) == 45 && fit_x(f, 367) == 465);
+    /* A 300 square: scaled up to fill the height, cropped at the sides. */
+    f = muse_np_art_fit(300, 300, 368, 448);
+    CHECK(f.step < 65536 && fit_y(f, 0) == 0 && fit_y(f, 447) == 299);
+    CHECK(fit_x(f, 0) == 26 && fit_x(f, 367) == 272);
+    /* Review Focus 4: never past the decoded image's edge, whatever its size. */
+    static const int sizes[][2] = { { 1, 1 }, { 368, 448 }, { 369, 449 }, { 640, 360 },
+                                    { 4096, 4096 }, { 4096, 1 }, { 1, 4096 } };
+    for (size_t i = 0; i < sizeof(sizes) / sizeof(sizes[0]); i++) {
+        f = muse_np_art_fit(sizes[i][0], sizes[i][1], 368, 448);
+        CHECK(fit_x(f, 367) < sizes[i][0] && fit_y(f, 447) < sizes[i][1]);
+    }
+}
+
+/* Joshua: a tap in the lower third (the buttons' row) never refreshes. */
+static void test_np_tap_refreshes(void)
+{
+    CHECK(muse_np_tap_refreshes(0, 448));
+    CHECK(muse_np_tap_refreshes(297, 448));
+    CHECK(!muse_np_tap_refreshes(299, 448));
+    CHECK(!muse_np_tap_refreshes(384, 448));   /* the buttons' centre */
+    CHECK(!muse_np_tap_refreshes(447, 448));
+    CHECK(muse_np_tap_refreshes(-1, 448) == false && !muse_np_tap_refreshes(448, 448));   /* off the tile */
+}
+
+static void test_np_dim(void)
+{
+    CHECK(muse_np_dim(0, 448) == 128);     /* 50% at the top */
+    CHECK(muse_np_dim(179, 448) == 128);   /* until 40% of the way down */
+    CHECK(muse_np_dim(447, 448) == 64);    /* 25% at the bottom */
+    CHECK(muse_np_dim(313, 448) > 64 && muse_np_dim(313, 448) < 128);
+    for (int y = 1; y < 448; y++) {
+        CHECK(muse_np_dim(y, 448) <= muse_np_dim(y - 1, 448));   /* never brighter going down */
+    }
+    CHECK(muse_np_rgb565(255, 255, 255) == 0xFFFF);
+    CHECK(muse_np_rgb565(255, 0, 0) == 0xF800 && muse_np_rgb565(0, 0, 255) == 0x001F);
+    CHECK(muse_np_dim565(0xFFFF, 256) == 0xFFFF);
+    CHECK(muse_np_dim565(0xFFFF, 128) == (uint16_t)((15 << 11) | (31 << 5) | 15));
+    CHECK(muse_np_dim565(0xF800, 0) == 0);
+}
+
+/* parse_media on parsed JSON. The fields point into *p, which the caller deletes. */
+static bool media(const char *json, cJSON **p, muse_np_fields_t *f, char *err)
+{
+    *p = NULL;
+    if (json) {
+        *p = cJSON_Parse(json);
+        if (!*p) {
+            fprintf(stderr, "bad test JSON: %s\n", json);
+            exit(2);
+        }
+    }
+    err[0] = '\0';
+    return parse_media(*p, f, err, 160);
+}
+
+static void test_parse_media(void)
+{
+    muse_np_fields_t f;
+    cJSON *p;
+    char err[160];
+    CHECK(media("{\"title\":\"So What\",\"artist\":\"Miles Davis\",\"state\":\"playing\",\"player_id\":\"ap12ab\","
+                "\"art_url\":\"http://192.168.7.132:8095/imageproxy?path=x&size=448&fmt=jpeg\"}", &p, &f, err) &&
+          !strcmp(f.title, "So What") && !strcmp(f.artist, "Miles Davis") && !strcmp(f.state, "playing") &&
+          !strcmp(f.player_id, "ap12ab") && !strncmp(f.art_url, "http://", 7) && !f.album && !f.player);
+    cJSON_Delete(p);
+    /* Review Focus 1: an older skill's call, and none at all. */
+    CHECK(media("{\"player\":\"Kitchen\",\"title\":\"x\"}", &p, &f, err) && !f.player_id && !f.art_url);
+    cJSON_Delete(p);
+    CHECK(media("{}", &p, &f, err) && !f.title);
+    cJSON_Delete(p);
+    CHECK(media(NULL, &p, &f, err) && !f.state);
+    CHECK(media("{\"art_url\":\"\"}", &p, &f, err) && f.art_url && !f.art_url[0]);   /* clears the art */
+    cJSON_Delete(p);
+    CHECK(media("{\"art_url\":\"https://i.scdn.co/image/ab67616d\"}", &p, &f, err));
+    cJSON_Delete(p);
+    CHECK(media("{\"state\":\"idle\",\"title\":\"\"}", &p, &f, err) && !strcmp(f.state, "idle"));
+    cJSON_Delete(p);
+    CHECK(media(json_of("art_url", "http://", 512), &p, &f, err));
+    cJSON_Delete(p);
+    CHECK(media(json_of("player_id", "", 64), &p, &f, err));
+    cJSON_Delete(p);
+    /* Refused, saying why. */
+    CHECK(!media("{\"state\":\"stopped\"}", &p, &f, err) && strstr(err, "playing, paused or idle"));
+    cJSON_Delete(p);
+    CHECK(!media("{\"title\":5}", &p, &f, err) && strstr(err, "title"));
+    cJSON_Delete(p);
+    CHECK(!media(json_of("art_url", "http://", 513), &p, &f, err) && strstr(err, "512"));
+    cJSON_Delete(p);
+    CHECK(!media("{\"art_url\":\"ftp://host/a.jpg\"}", &p, &f, err) && strstr(err, "art_url"));
+    cJSON_Delete(p);
+    CHECK(!media("{\"art_url\":\"http://host/a b.jpg\"}", &p, &f, err));
+    cJSON_Delete(p);
+    CHECK(!media("{\"art_url\":\"http://\"}", &p, &f, err));
+    cJSON_Delete(p);
+    CHECK(!media("{\"player_id\":\"\"}", &p, &f, err) && strstr(err, "player_id"));
+    cJSON_Delete(p);
+    CHECK(!media(json_of("player_id", "", 65), &p, &f, err) && strstr(err, "64"));
+    cJSON_Delete(p);
+    CHECK(!media("{\"player_id\":\"a\\nb\"}", &p, &f, err));
+    cJSON_Delete(p);
+    /* A misspelled or unknown parameter is refused, not ignored. */
+    CHECK(!media("{\"title\":\"x\",\"duration\":200}", &p, &f, err) && strstr(err, "duration"));
+    cJSON_Delete(p);
+    /* Review fix: the bridge gives null for what a track lacks (a radio stream's
+     * album, a local file's cover): not sent, except art_url, where null clears. */
+    CHECK(media("{\"title\":\"Radio 1\",\"artist\":null,\"album\":null,\"state\":null,\"art_url\":null}", &p, &f,
+                err) &&
+          !strcmp(f.title, "Radio 1") && !f.artist && !f.album && !f.state && f.art_url && !f.art_url[0]);
+    cJSON_Delete(p);
+    CHECK(media("{\"player_id\":null}", &p, &f, err) && !f.player_id);
+    cJSON_Delete(p);
+    /* audio.play_url still takes https only. */
+    gadget_sound_t s;
+    CHECK(!sound("audio.play_url", "{\"url\":\"http://example.com/a.mp3\"}", &s, err));
+}
+
+static void test_media_result(void)
+{
+    static const muse_np_art_t arts[] = { MUSE_NP_ART_NONE, MUSE_NP_ART_LOADING, MUSE_NP_ART_UNCHANGED,
+                                          MUSE_NP_ART_CLEARED };
+    static const char *const names[] = { "none", "loading", "unchanged", "cleared" };
+    for (int i = 0; i < 4; i++) {
+        cJSON *r = media_result(arts[i]);
+        CHECK(cJSON_IsTrue(cJSON_GetObjectItem(r, "ok")));
+        cJSON *art = cJSON_GetObjectItem(cJSON_GetObjectItem(r, "payload"), "art");
+        CHECK(cJSON_IsString(art) && !strcmp(art->valuestring, names[i]));
+        cJSON_Delete(r);
+    }
+}
+
 int main(void)
 {
     test_parse_settings();
@@ -597,6 +782,13 @@ int main(void)
     test_parse_options();
     test_options_step();
     test_options_message();
+    test_np_message();
+    test_np_art_scale();
+    test_np_art_fit();
+    test_np_dim();
+    test_np_tap_refreshes();
+    test_parse_media();
+    test_media_result();
     if (failures) {
         fprintf(stderr, "%d check(s) failed\n", failures);
         return 1;

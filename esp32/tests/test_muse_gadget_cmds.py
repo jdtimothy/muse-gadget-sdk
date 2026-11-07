@@ -180,6 +180,74 @@ class MuseGadgetCmdsSourceTest(unittest.TestCase):
         cmake = (ROOT / "components/muse/CMakeLists.txt").read_text()
         self.assertIn('"muse_gadget_options.c"', cmake)
 
+    def test_now_playing_is_advertised_dispatched_and_built(self):
+        source = SOURCE.read_text()
+        add = source[source.index("void muse_gadget_add_commands("):]
+        block = add[add.index("#if CONFIG_MUSE_HATCH"):]
+        block = block[:block.index("#endif")]
+        self.assertIn('"media.update"', block)
+        self.assertIn('"player_id"', block)
+        self.assertIn('"art_url"', block)
+        body = source[source.index("cJSON *muse_gadget_command("):]
+        self.assertIn("media_command(params)", body[:body.index("\n}\n")])
+        cmake = (ROOT / "components/muse/CMakeLists.txt").read_text()
+        self.assertIn('"muse_gadget_media.c"', cmake)
+        ui = (ROOT / "components/muse/muse_ui.c").read_text()
+        # The tile's code lives in muse_gadget_media.c; muse_ui.c keeps hooks.
+        self.assertNotIn("muse_ui_now_playing", ui)
+        self.assertNotIn("np_apply_pending", ui)
+        self.assertIn('#include "muse_gadget_media.h"', ui)
+        self.assertIn("muse_media_build(s_np, s_w, s_h);", ui)
+        self.assertIn("muse_media_frame();", ui)
+        # LVGL's tile indexes are uint8_t: Now Playing is column 0, the face after it.
+        self.assertIn("s_np = lv_tileview_add_tile(s_tv, 0, 0, LV_DIR_RIGHT);", ui)
+        self.assertIn("s_face = lv_tileview_add_tile(s_tv, NP_TILE, 0,", ui)
+        self.assertIn("lv_tileview_set_tile(s_tv, s_face, LV_ANIM_OFF);", ui)
+        self.assertNotIn("lv_tileview_add_tile(s_tv, -1,", ui)
+        self.assertIn("static lv_obj_t *s_dots[2 + NP_TILE];", ui)
+        # With the face in column 1, "scrolled" means away from the face's x, not from 0:
+        # comparing with 0 froze the avatar (it only drew mid-swipe) and kept settings ticking.
+        self.assertIn("muse_settings_ui_tick(lv_obj_get_scroll_x(s_tv) > lv_obj_get_x(s_face));", ui)
+        self.assertIn("if (s_tv && lv_obj_get_scroll_x(s_tv) != lv_obj_get_x(s_face)) {", ui)
+        self.assertNotRegex(ui, r"lv_obj_get_scroll_x\(s_tv\) (!=|>|==) 0\b")
+        media = (ROOT / "components/muse/muse_gadget_media.c").read_text()
+        press = media[media.index("static void press("):]
+        press = press[:press.index("\n}\n")]
+        self.assertIn("muse_hatch_ready()", press)          # Review Focus 3
+        self.assertIn("busy_mode()", press)
+        self.assertIn("muse_hatch_quiet_turn(msg)", press)
+        self.assertIn("if (s_pending)", press)
+        # Joshua's idle: the last track and cover stay, the buttons grey out and
+        # don't respond, and "Tap to update" shows (big and centred with no track).
+        self.assertIn('"Tap to update"', media)
+        update = media[media.index("muse_np_art_t muse_media_update("):]
+        self.assertNotIn("idle", update[:update.index("\n}\n")])
+        button = media[media.index("static void on_button("):]
+        self.assertIn("idle()", button[:button.index("\n}\n")])
+        # Joshua: the lower third (the buttons' row) never refreshes; taps are logged
+        # with their point, to check the touch lines up with the buttons.
+        tile = media[media.index("static void on_tile("):]
+        tile = tile[:tile.index("\n}\n")]
+        self.assertIn("muse_np_tap_refreshes(", tile)
+        self.assertIn("ESP_LOGI(", tile)
+        # On the board, touches near the bottom read 20-55 px low, so taps on the
+        # buttons missed them: the lower third is three tap zones, one per button.
+        build = media[media.index("void muse_media_build("):]
+        build = build[:build.index("\n}\n")]
+        self.assertIn("make_zone(", build)
+        zone = media[media.index("static void make_zone("):]
+        zone = zone[:zone.index("\n}\n")]
+        self.assertIn("lv_obj_add_event_cb(z, on_button, LV_EVENT_CLICKED", zone)
+        self.assertIn("LV_OBJ_FLAG_CLICKABLE", zone)
+        self.assertLess(build.index("make_zone("), build.index("make_button("))   # buttons stay on top
+        # Review fix: a cover that failed is fetched again; "unchanged" only means
+        # it's showing or on its way.
+        self.assertIn("muse_art_has(", update[:update.index("\n}\n")])
+        self.assertNotIn("!strcmp(url, s_data.art_url)", media)
+        art = (ROOT / "components/muse/muse_gadget_art.c").read_text()
+        has = art[art.index("bool muse_art_has("):]
+        self.assertIn("taskENTER_CRITICAL(&s_lock);", has[:has.index("\n}\n")])
+
     def test_buttons_draw_showable_text_and_send_the_original(self):
         # Review fix: unscii-16 has no curly quotes; a tap still sends Muse its own words.
         opts = (ROOT / "components/muse/muse_gadget_options.c").read_text()
@@ -210,6 +278,44 @@ class MuseGadgetCmdsSourceTest(unittest.TestCase):
         self.assertIn("emit(MUSE_HATCH_EV_HEARD, caption)", tap)
         self.assertIn('send_chat(message, "text")', tap)
         self.assertIn("if (!s_turn.tap) {", session)          # no "note sent" caption for a tap
+
+    def test_art_is_built_and_logs_no_urls(self):
+        cmake = (ROOT / "components/muse/CMakeLists.txt").read_text()
+        self.assertIn('"muse_gadget_art.c"', cmake)
+        art = (ROOT / "components/muse/muse_gadget_art.c").read_text()
+        self.assertIn("#if CONFIG_MUSE_GADGET_COMMANDS && CONFIG_MUSE_HATCH", art)
+        self.assertIn("muse_tts_google_roots()", art)        # as clips: GTS cross-signed roots
+        self.assertIn("rom/tjpgd.h", art)
+        for call in re.findall(r"ESP_LOG\w\(.*?\);", art, re.S):
+            self.assertNotIn("url", call.split(",", 1)[-1], call)   # the host only, never the URL
+        # Review Focus 4: the buffer to fill is chosen, and a finished one handed over, under the lock.
+        decode = art[art.index("static void decode("):]
+        decode = decode[:decode.index("\n}\n")]
+        self.assertRegex(decode, r"taskENTER_CRITICAL\(&s_lock\);\s*\n\s*int back = s_front == 0 \? 1 : 0;")
+        take = art[art.index("const uint16_t *muse_art_take("):]
+        self.assertIn("taskENTER_CRITICAL(&s_lock);", take[:take.index("\n}\n")])
+
+    def test_quiet_turn_in_the_chat_session(self):
+        # Review Focus 3: a Now Playing press is a typed turn that reports nowhere.
+        chat_h = (ROOT / "components/muse/muse_chat.h").read_text()
+        self.assertIn("bool muse_hatch_quiet_turn(const char *text);", chat_h)
+        self.assertIn("bool muse_hatch_quiet_active(void);", chat_h)
+        session = (ROOT / "components/muse/muse_chat_session.cpp").read_text()
+        self.assertIn("CMD_QUIET", session)
+        quiet = session[session.index("static void quiet_begin("):]
+        quiet = quiet[:quiet.index("\n}\n")]
+        self.assertIn("turn_start(0, true)", quiet)            # typed: no events reach the voice task
+        self.assertIn("s_quiet_next = true;", quiet)
+        self.assertIn('send_chat(text, "text")', quiet)
+        start = session[session.index("static bool turn_start("):]
+        self.assertIn("s_turn.quiet = s_quiet_next;", start[:start.index("\n}\n")])
+        finish = session[session.index("static void turn_finish("):]
+        self.assertIn("s_quiet_open = false;", finish[:finish.index("\n}\n")])
+        # Every console report of a typed turn's progress skips quiet ones.
+        self.assertEqual(session.count("if (s_turn.text && !s_turn.quiet) {"), 2)   # turn_fail, turn_done
+        self.assertIn("if (s_turn.text && !s_turn.quiet && s_turn.agent_busy != was) {", session)
+        self.assertRegex(session, r"if \(!s_turn\.quiet\) \{\s*\n\s*if \(final_text && final_text\[0\]")
+        self.assertRegex(session, r'if \(!s_turn\.quiet\) \{\s*\n\s*muse_hatch_console\("text", text')
 
     def test_voice_task_takes_taps(self):
         voice = (ROOT / "components/muse/muse_voice.c").read_text()
