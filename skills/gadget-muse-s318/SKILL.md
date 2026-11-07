@@ -3,7 +3,7 @@ name: gadget-muse-s318
 description: >-
   Use the user's Muse Gadget, a desk companion on a Waveshare ESP32-S3 1.8" AMOLED
   running the Muse Gadget SDK: read or change its volume, mute, brightness and screen
-  sleep, report its battery, switch the voice it speaks in, show reactions on its avatar, offer reply buttons on its screen, show what's playing with cover art, make it say things aloud,
+  sleep, report its battery, show reactions on its avatar, offer reply buttons on its screen, show what's playing with cover art,
   play sound clips and chimes, show a picture on its screen, and scan the home
   network through it. Also use it for every push-to-talk voice note from the
   gadget (a voice-note message with an auto-transcript and one attachment named
@@ -17,8 +17,9 @@ description: >-
 The gadget is a small desk companion. It has a 368x448 AMOLED touch screen with
 rounded corners showing an animated avatar, a speaker and microphone, and a
 battery. The user holds its BOOT button to send you a voice note; your reply is
-shown as captions and spoken aloud in an ElevenLabs voice. It reaches you through
-Home Link, and the commands below are its tools.
+shown on its screen as captions, not spoken. Tapping BOOT starts a live voice call
+instead, in your own voice. It reaches you through Home Link, and the commands
+below are its tools.
 
 ## Recognising the gadget
 
@@ -26,17 +27,17 @@ A push-to-talk voice note from the gadget reaches you as a voice-note message
 with an auto-transcript and one audio attachment named `voice_note-<n>.wav`
 (e.g. `voice_note-113.wav`). It does not carry the phone app's device tag.
 Treat every such message as the user talking to you through the gadget, even
-when they don't mention it: your reply will be spoken by the gadget in its
-voice, with its avatar on screen.
+when they don't mention it: your reply will be read on the gadget's small
+screen, with its avatar above it.
 
 A message like `next [pressed on the gadget's Now Playing tile; player_id: …]`
 is the user pressing a button on the Now Playing tile, or tapping the tile to
 refresh it. It is not a conversation turn: follow "Now Playing presses" below,
-and reply with only `ok`. Nothing you write on that turn is spoken or shown.
+and reply with only `ok`. Nothing you write on that turn is shown.
 
 A message ending in `[tapped on the gadget]` is the user tapping one of the
 reply buttons you offered with `display.options`: the words before the tag are
-their reply. Treat it exactly like a voice note (your answer is spoken by the
+their reply. Treat it exactly like a voice note (your answer is shown on the
 gadget; react if it fits; offer new buttons if they fit). Don't repeat the tag.
 
 On those turns, before you write your reply:
@@ -45,7 +46,8 @@ On those turns, before you write your reply:
    news, a joke, a kind word, a yes/no question, a weather question, and so on.
    Most turns still need none.
 2. If one fits, call `avatar.react` first. It plays just after your reply ends.
-3. Then reply as usual, in one or two spoken sentences.
+3. Then reply as usual, in one to three short plain sentences: no lists, links or
+   Markdown. It's read on a small screen.
 
 ## Commands
 
@@ -57,14 +59,13 @@ reports.
 | Parameter | Values |
 |---|---|
 | `volume` | 0-100 |
-| `muted` | `true` or `false`. Muted: replies are captioned, not spoken. |
+| `muted` | `true` or `false`. Muted: chimes and clips stay silent. |
 | `brightness` | 10-100 |
 | `screen_sleep_s` | 0 (never), 30, 60, 120, 300 or 600 |
 
 It always answers with the current `volume`, `muted`, `brightness`,
-`screen_sleep_s`, `battery_percent` (null with no reading), `charging`, `on_usb`
-and `voice`: the voice's name, or its ElevenLabs ID if none has been chosen with
-`voice.select` yet (`voice.select` with no parameters gives its name).
+`screen_sleep_s`, `battery_percent` (null with no reading), `charging` and
+`on_usb`. Ignore its `voice` field.
 
 - "How much battery is left?": call it with no parameters, and answer with the
   percent, adding "and charging" when `charging` is true.
@@ -76,47 +77,17 @@ and `voice`: the voice's name, or its ElevenLabs ID if none has been chosen with
 - A bad value comes back `invalid_params`, and nothing changes. Fix it from the
   message and retry once.
 
-### voice.select
+### voice.select and voice.say
 
-- With no parameters, it lists `voices` (each with a `name` and maybe a
-  `category`) from the user's ElevenLabs library, and the `current` one.
-  `not_listed` counts any that didn't fit in the list; those can still be chosen
-  by name.
-- With `name`, it switches to that voice from the next reply on. Matching ignores
-  case and accepts the start of a name ("George" for "George - Warm, Captivating
-  Storyteller") or a voice ID.
-- `not_found` and `ambiguous` errors name the candidates in their message: offer
-  those to the user. `unavailable` means the gadget has no ElevenLabs key, or the
-  key lacks the Voices read permission: say so. `busy` means a lookup is running:
-  wait a few seconds and retry once.
-- When asked which voices there are, give the short names (the part before " - "),
-  not the whole descriptions.
-- After switching, the gadget says hello in the new voice by itself. Don't
-  announce the switch with `voice.say` as well.
-
-### voice.say
-
-Says `text` (1-600 bytes) aloud in the gadget's current voice, with the text as
-the caption (`caption: false` hides it). It answers at once with
-`{"queued": true, "position": n}`, and the gadget speaks once it's idle, after
-any reply it's in the middle of. A press of its talk button cuts it off.
-
-- Use it for announcements the user asks for from elsewhere ("tell the gadget to
-  say dinner's ready"), and for reminders they set.
-- When the user is talking to you through the gadget, just reply: your reply is
-  already spoken. Never repeat your reply through `voice.say`.
-- Keep it short, as speech: one or two sentences, no lists or links.
-- `muted` means the speaker is off. With a caption, the text is shown on the
-  screen instead. Tell the user it's muted. Don't unmute or raise the volume to
-  be heard unless they ask.
-- `unavailable`: the gadget has no ElevenLabs key. `busy`: four sounds are
-  already waiting. Try again a little later.
+These need an ElevenLabs key, and the gadget has none: they answer `unavailable`.
+Don't use them. If the user asks you to say something on the gadget, tell them it
+only speaks on a live call, and that a tap of BOOT starts one.
 
 ### audio.chime
 
 Plays a built-in sound: `ding`, `success`, `error`, `alert`, `timer`, `tada` or
-`choose` (the "your turn" sound reply buttons play by themselves). Queued like
-`voice.say`.
+`choose` (the "your turn" sound reply buttons play by themselves). Queued, and
+played once the gadget is idle.
 
 - `success` or `error` after an action the user asked for, if a sound fits.
 - `timer` when a countdown the user set is up.
@@ -127,7 +98,7 @@ Plays a built-in sound: `ding`, `success`, `error`, `alert`, `timer`, `tada` or
 ### audio.play_url
 
 Plays an MP3 from an `https://` URL: at most 1 MB and 60 s, which cuts longer
-clips off. Queued like `voice.say`. Only use URLs the user gives you, or
+clips off. Queued like a chime. Only use URLs the user gives you, or
 well-known public sound clips. If it can't play the clip, the gadget shows
 "COULDN'T PLAY THE CLIP"; you won't hear about it, so don't promise it played.
 
@@ -138,8 +109,8 @@ back. `name` is one of: `love`, `laugh`, `excited`, `surprised`, `confused`,
 `sad`, `grumpy`, `sleepy`, `nervous`, `cool`, `wink`, `yes`, `no`,
 `celebrate`, and for weather `sunny`, `rainy`, `stormy`, `cold`, `windy`, `hot`,
 `rainbow`. `none` clears it. It answers at once. Reactions never play while the
-gadget talks or thinks: one you call during a turn waits and plays in full just
-after your spoken reply ends (the answer says `waiting`). A talk press cancels
+gadget shows a reply or thinks: one you call during a turn waits and plays in full
+just after your reply ends (the answer says `waiting`). A talk press cancels
 it. So call it before you reply, and let the reply finish on it.
 
 - React sparingly: at most one reaction a reply, and not on every turn. Most
@@ -157,17 +128,17 @@ it. So call it before you reply, and let the reply finish on it.
 
 ### display.options
 
-Shows 2-4 reply buttons on the gadget's screen once your spoken reply ends,
+Shows 2-4 reply buttons on the gadget's screen once your reply ends,
 with a short chime. `options` is a list of 2-4 labels, 1-24 characters each,
 worded as the user's reply ("Yes, play it", "Tell me more", "No thanks"). A tap
 sends that label to you as the user's next message, tagged
-`[tapped on the gadget]`, and your answer is spoken. The buttons go when tapped,
+`[tapped on the gadget]`, and your answer is shown. The buttons go when tapped,
 when the user presses talk, or after 30 seconds. A new call replaces them.
 
 - Offer them when your reply ends in a question with a few natural answers, a
   short choice, a confirmation, or a quiz. Most replies need none.
 - On a voice note or a tapped message, call it before you finish your reply:
-  the buttons wait until the speech is over.
+  the buttons wait until the reply has been shown.
 - Keep labels short and distinct; don't offer "Other" or "Something else": the
   user can always just press talk.
 
@@ -216,10 +187,9 @@ asks for a refresh. Each arrives as a message:
    paused one; if none is either, send only `state` as `idle`.
 3. Then call `media.update` on the gadget with the result, `player_id` and
    `art_url` included.
-4. Reply with only `ok`. Nothing is spoken.
-5. If the bridge fails, call `voice.say` with a few words ("The Kitchen speaker
-   isn't responding"), then still call `media.update` with what you know, so the
-   gadget stops waiting.
+4. Reply with only `ok`. Nothing is shown.
+5. If the bridge fails, call `audio.chime` with `error`, then still call
+   `media.update` with what you know, so the gadget stops waiting.
 
 ### device.health
 
@@ -256,11 +226,8 @@ when the user asks and gives a firmware URL — never on your own.
 ## Limits
 
 - Settings apply at once and survive restarts.
-- A new voice takes effect from the next reply, and says hello once it's chosen.
 - Sounds play one after another, after any reply in progress. The talk button
   stops them.
 - Reactions are the 21 above, and they play after a reply, never during it; it
   can't show arbitrary images as reactions (use `display.draw_url` for a picture).
 - Reply buttons hold 2-4 labels of up to 24 characters; longer ones are refused.
-- The Sir Michael Caine ElevenLabs voice goes silent on this gadget — never
-  offer it as a choice.
