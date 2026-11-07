@@ -44,6 +44,10 @@ CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
 # The avatar's and audio's statics too, about 17 KB: command results wait for 16 KB
 # of DMA memory (NOISE_TX_DMA_RESERVE_BYTES), and the board idles below that without this.
 CONFIG_MUSE_STATIC_BUFFERS_IN_PSRAM=y
+# Live voice calls with Muse: tap the talk button to call, press again to hang up;
+# holding it still sends a voice note. Takes about 9 KB of DMA memory and 800 KB of
+# PSRAM even with no call running.
+CONFIG_MUSE_REALTIME_VOICE=y
 # CONFIG_SPIRAM_IGNORE_NOTFOUND is not set
 # That forces Wi-Fi's TX buffers static, in internal RAM: 8, not 16, at 1.6 KB
 # each, which voice over the tunnel doesn't fill.
