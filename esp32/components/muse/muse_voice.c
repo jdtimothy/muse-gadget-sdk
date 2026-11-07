@@ -1350,7 +1350,6 @@ static void voice_task(void *arg)
                 pending_down = send_held(asleep);
                 pre_reset();
                 if (!pending_down && !asleep && muse_state_mode(NULL) != MUSE_MODE_IDLE) {
-                    muse_state_make_happy();
                     go_idle("");
                 }
                 continue;
@@ -1404,7 +1403,6 @@ static void voice_task(void *arg)
                 pending_down = tap_turn(message, label);
                 pre_reset();
                 if (!pending_down && muse_state_mode(NULL) != MUSE_MODE_IDLE) {
-                    muse_state_make_happy();
                     go_idle("");
                 }
                 continue;
@@ -1524,7 +1522,6 @@ static void voice_task(void *arg)
         pending_down = finish_note();
         pre_reset();
         if (!pending_down && muse_state_mode(NULL) != MUSE_MODE_IDLE) {
-            muse_state_make_happy();
             go_idle("");
         }
     }
