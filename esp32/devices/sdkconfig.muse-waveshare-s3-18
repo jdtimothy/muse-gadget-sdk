@@ -76,3 +76,7 @@ CONFIG_USJ_NO_AUTO_LS_ON_CONNECTION=y
 # actually slept, and how long each power lock kept the chip awake.
 CONFIG_PM_LIGHT_SLEEP_CALLBACKS=y
 CONFIG_PM_PROFILING=y
+
+# Smaller voice-session buffers (about 610 KB less PSRAM): replies are captions only
+# here, and WebAssembly apps need 2 MB of PSRAM free to start.
+CONFIG_MUSE_HATCH_COMPACT_BUFFERS=y
