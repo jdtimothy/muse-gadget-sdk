@@ -4,7 +4,7 @@ description: >-
   Use the user's Muse Gadget, a desk companion on a Waveshare ESP32-S3 1.8" AMOLED
   running the Muse Gadget SDK: read or change its volume, mute, brightness and screen
   sleep, report its battery, show reactions on its avatar, offer reply buttons on its screen, show what's playing with cover art,
-  play sound clips and chimes, show a picture on its screen, and scan the home
+  play sound clips and chimes, show a picture on its screen, run small apps on it, and scan the home
   network through it. Also use it for every push-to-talk voice note from the
   gadget (a voice-note message with an auto-transcript and one attachment named
   voice_note-<n>.wav, with no phone app device tag),
@@ -79,9 +79,9 @@ It always answers with the current `volume`, `muted`, `brightness`,
 
 ### voice.select and voice.say
 
-These need an ElevenLabs key, and the gadget has none: they answer `unavailable`.
-Don't use them. If the user asks you to say something on the gadget, tell them it
-only speaks on a live call, and that a tap of BOOT starts one.
+These need an ElevenLabs key, and the gadget has none, so it doesn't offer them.
+If the user asks you to say something on the gadget, tell them it only speaks on
+a live call, and that a tap of BOOT starts one.
 
 ### audio.chime
 
@@ -203,6 +203,19 @@ JPEG, ideally 368x448, with the subject centred because the corners are
 rounded. The avatar comes back with `display.show_animation`, a tap, or the
 talk button. Only show pictures when the user asks for one or it clearly
 helps.
+
+### Apps (app.run, app.install and the rest)
+
+When the user turns on Run apps in the gadget's Settings, it offers the app
+commands (`app.run`, `app.install`, `app.list`, `files.put` and the others): small
+WebAssembly apps that take over its screen. How to write and build them is in the
+gadget apps guide (`~/gadget-sdk/`, set up from the MUSE.md the user sends you);
+`device.guide` says what this gadget has. With apps on, the gadget doesn't offer
+`display.draw_file`, to keep its command list within its size limit: show pictures
+with `display.draw_url`, or put them on the gadget with `files.put` for an app.
+The screen is 368x448 with rounded corners, and touch reads low near the bottom
+edge, so give buttons there a generous hit area. Reactions, reply buttons and the
+Now Playing tile are hidden while an app runs; `app.stop` brings the avatar back.
 
 ### device.discover
 

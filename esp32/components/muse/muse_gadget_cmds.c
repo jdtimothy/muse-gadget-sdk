@@ -1176,53 +1176,62 @@ static cJSON *one_param(const char *name, const char *type, const char *descript
     return o;
 }
 
+#ifndef CONFIG_MUSE_TTS_ELEVENLABS_API_KEY
+#define CONFIG_MUSE_TTS_ELEVENLABS_API_KEY ""
+#endif
+
+/* Kept short: link.register must stay under 8 KB, and with WebAssembly apps
+ * on it carries their commands too. The skill has the detail. */
 void muse_gadget_add_commands(cJSON *commands)
 {
     cJSON *opt = cJSON_CreateObject();
-    cJSON_AddItemToObject(opt, "volume", param("integer", "Speaker volume, 0-100."));
-    cJSON_AddItemToObject(opt, "muted", param("boolean", "true: replies are shown, not spoken."));
-    cJSON_AddItemToObject(opt, "brightness", param("integer", "Screen brightness, 10-100."));
-    cJSON_AddItemToObject(opt, "screen_sleep_s",
-                          param("integer", "Screen sleeps after 0 (never), 30, 60, 120, 300 or 600 s."));
+    cJSON_AddItemToObject(opt, "volume", param("integer", "0-100."));
+    cJSON_AddItemToObject(opt, "muted", param("boolean", "true: replies shown, not spoken."));
+    cJSON_AddItemToObject(opt, "brightness", param("integer", "10-100."));
+    cJSON_AddItemToObject(opt, "screen_sleep_s", param("integer", "0 (never), 30, 60, 120, 300 or 600."));
     add_command(commands, "device.settings",
-                "Read or change volume, mute, brightness and screen sleep. "
-                "Reports them all, with the battery and voice.",
-                NULL, opt);
-    add_command(commands, "avatar.react", "Show a reaction on the avatar for a few seconds, after any reply in progress.",
-                one_param("name", "string", MUSE_REACTION_NAMES_TEXT ", or none to clear."),
+                "Read or set volume, mute, brightness, screen sleep; reports them, battery and voice.", NULL, opt);
+    add_command(commands, "avatar.react", "Show a reaction on the avatar, after any reply.",
+                one_param("name", "string", MUSE_REACTION_NAMES_TEXT ", or none."),
                 one_param("seconds", "integer", "1-30, default 4."));
 #if CONFIG_MUSE_HATCH
-    cJSON *vopt = cJSON_CreateObject();
-    cJSON_AddItemToObject(vopt, "name", param("string", "Voice to switch to; without it, lists them."));
-    cJSON *v = add_command(commands, "voice.select",
-                           "List the ElevenLabs voices replies can be spoken in, or switch to one.", NULL, vopt);
-    cJSON_AddNumberToObject(v, "timeout_ms", 30000);
-    add_command(commands, "voice.say", "Say text aloud on the gadget, captioned. Queued: plays once it's idle.",
-                one_param("text", "string", "What to say, up to 600 bytes."),
-                one_param("caption", "boolean", "false: don't show it."));
-    add_command(commands, "audio.play_url", "Play an MP3 from an https URL (up to 1 MB, 60 s). Queued.",
-                one_param("url", "string", "https:// link to an MP3."), NULL);
+    if (CONFIG_MUSE_TTS_ELEVENLABS_API_KEY[0]) {   /* without a key they only answer unavailable */
+        cJSON *vopt = cJSON_CreateObject();
+        cJSON_AddItemToObject(vopt, "name", param("string", "Voice to switch to; without it, lists them."));
+        cJSON *v = add_command(commands, "voice.select", "List the ElevenLabs voices, or switch to one.", NULL, vopt);
+        cJSON_AddNumberToObject(v, "timeout_ms", 30000);
+        add_command(commands, "voice.say", "Say text aloud, captioned. Queued.",
+                    one_param("text", "string", "Up to 600 bytes."),
+                    one_param("caption", "boolean", "false: don't show it."));
+    }
+    add_command(commands, "audio.play_url", "Play an https MP3 (1 MB, 60 s max). Queued.",
+                one_param("url", "string", "https:// MP3 link."), NULL);
     add_command(commands, "audio.chime", "Play a built-in chime. Queued.",
                 one_param("name", "string", MUSE_CHIME_NAMES "."), NULL);
-    cJSON *opts = param("array", "2-4 short replies, up to 24 characters each.");
+    cJSON *opts = param("array", "2-4 replies, 24 characters max.");
     cJSON *item = cJSON_CreateObject();
     cJSON_AddStringToObject(item, "type", "string");
     cJSON_AddItemToObject(opts, "items", item);
     cJSON *oreq = cJSON_CreateObject();
     cJSON_AddItemToObject(oreq, "options", opts);
-    add_command(commands, "display.options", "Show reply buttons after the spoken reply; a tap sends that reply.",
-                oreq, NULL);
+    add_command(commands, "display.options", "Reply buttons after the reply; a tap sends that reply.", oreq, NULL);
     cJSON *mopt = cJSON_CreateObject();
-    cJSON_AddItemToObject(mopt, "player", param("string", "Player name, e.g. Kitchen."));
-    cJSON_AddItemToObject(mopt, "title", param("string", "Track title."));
-    cJSON_AddItemToObject(mopt, "artist", param("string", "Artist name."));
-    cJSON_AddItemToObject(mopt, "album", param("string", "Album name."));
+    cJSON_AddItemToObject(mopt, "player", param("string", "Player name."));
+    cJSON_AddItemToObject(mopt, "title", param("string", "Title."));
+    cJSON_AddItemToObject(mopt, "artist", param("string", "Artist."));
+    cJSON_AddItemToObject(mopt, "album", param("string", "Album."));
     cJSON_AddItemToObject(mopt, "state", param("string", "playing, paused or idle."));
-    cJSON_AddItemToObject(mopt, "player_id", param("string", "Music Assistant player id; presses send it back."));
-    cJSON_AddItemToObject(mopt, "art_url", param("string", "Cover JPEG, http(s); empty clears."));
-    add_command(commands, "media.update",
-                "Update the Now Playing tile (left of the avatar). Its presses come back as messages.",
-                NULL, mopt);
+    cJSON_AddItemToObject(mopt, "player_id", param("string", "Music Assistant id; presses send it back."));
+    cJSON_AddItemToObject(mopt, "art_url", param("string", "Cover JPEG URL; empty clears."));
+    add_command(commands, "media.update", "Update the Now Playing tile; presses come back as messages.", NULL, mopt);
+#endif
+#if CONFIG_MUSE_WASM_APPS && CONFIG_HOMEHUB_DISPLAY_COMMANDS
+    if (muse_settings_apps_on()) {
+        /* With the app commands, ours and Meta's don't all fit in 8 KB. Muse shows
+         * pictures with display.draw_url (the skill's way) or an app instead; the
+         * gadget still answers display.draw_file. */
+        cJSON_DeleteItemFromObject(commands, "display.draw_file");
+    }
 #endif
 }
 
