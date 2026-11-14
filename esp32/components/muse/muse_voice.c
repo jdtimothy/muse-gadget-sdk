@@ -1420,8 +1420,7 @@ static void voice_task(void *arg)
                 pending_down = hatch_reply(&delivered, true);
                 pre_reset();
                 if (!pending_down && muse_state_mode(NULL) != MUSE_MODE_IDLE) {
-                    muse_state_make_happy();
-                    go_idle("");
+                    go_idle("");   /* no hop after a reply (s318) */
                 }
                 continue;
             }
