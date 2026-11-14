@@ -57,7 +57,7 @@ $IdfArgs = @(
     '-B', $B,
     "-DIDF_TARGET=$Target",
     "-DSDKCONFIG=$B/sdkconfig",
-    "-DSDKCONFIG_DEFAULTS=sdkconfig.defaults;devices/sdkconfig.muse;devices/sdkconfig.muse-$BoardProfile"
+    "-DSDKCONFIG_DEFAULTS=sdkconfig.defaults;devices/sdkconfig.muse;devices/sdkconfig.muse-$BoardProfile;devices/sdkconfig.muse-apps"
 )
 
 function Need-Idf {
