@@ -20,7 +20,18 @@
  * latest message (GET /chat/history?limit=1, one message so the reply fits a
  * frame); the gadget parses the VM's formats, keeps the last 8 messages and
  * tells the app with EV_CHAT. It reconnects by itself, with backoff.
+ *
+ * Apps talk to the dedicated "Gadget Apps" side chat (APPS_CHAT_SESSION_ID),
+ * not the main chat: every request below carries that session_id, so app
+ * traffic (button presses, refreshes, NP1 replies) stays out of the person's
+ * main conversation. Voice notes and live calls use muse_chat_session.cpp,
+ * not this file, and stay in the main chat.
  */
+
+/* The "Gadget Apps" side chat apps are routed to (Joshua, 2026-11-15). */
+#define APPS_CHAT_SESSION_ID "6115bc95-4565-4474-add2-8cb7ba1c9463"
+#define APPS_CHAT_SUBSCRIBE_BODY "{\"session_id\":\"" APPS_CHAT_SESSION_ID "\"}"
+#define APPS_CHAT_HISTORY_PATH "/chat/history?limit=1&session_id=" APPS_CHAT_SESSION_ID
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -1047,7 +1058,7 @@ static void chat_history(void)
     uint8_t *buf = heap_caps_malloc(cap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     chat_row_t *row = heap_caps_malloc(sizeof(*row), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (buf && row) {
-        muse_apps_fetch_t f = {.verb = "GET", .path = "/chat/history?limit=1", .json = true,
+        muse_apps_fetch_t f = {.verb = "GET", .path = APPS_CHAT_HISTORY_PATH, .json = true,
                                .reply = buf, .reply_cap = cap, .timeout_ms = HISTORY_TIMEOUT_MS};
         int status = muse_apps_vm_fetch(&f);
         if (status == 200 && !f.reply_cut) {
@@ -1089,7 +1100,7 @@ static void chat_connect(void *arg)
     chat_parser_init(&s_chat.parser, true, &s_chat.mem->row, apply_line, &s_chat.mem->store);
     chat_store_connected(&s_chat.mem->store);
     unlock();
-    int64_t id = muse_apps_vm_open("POST", "/chat/subscribe", "application/x-ndjson", "{}", chat_frame,
+    int64_t id = muse_apps_vm_open("POST", "/chat/subscribe", "application/x-ndjson", APPS_CHAT_SUBSCRIBE_BODY, chat_frame,
                                    (void *)(uintptr_t)token);
     lock();
     bool mine = s_chat.open && s_chat.gen == token;
@@ -1346,7 +1357,7 @@ int32_t gadget_chat_send(wasm_exec_env_t env, const char *text)
     const char *name = muse_apps_name();
     size_t msg_cap = strlen(name) + n + 32;
     char *message = heap_caps_malloc(msg_cap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    send_job_t *j = message ? heap_caps_malloc(sizeof(*j) + 6 * msg_cap + 64, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) : NULL;
+    send_job_t *j = message ? heap_caps_malloc(sizeof(*j) + 6 * msg_cap + 128, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) : NULL;
     if (!j) {
         heap_caps_free(message);
         return GADGET_ERR_NO_MEMORY;
@@ -1355,7 +1366,7 @@ int32_t gadget_chat_send(wasm_exec_env_t env, const char *text)
     char *o = j->body;
     o += sprintf(o, "{\"message\":\"");
     o += muse_apps_vm_json_escape(o, message, (size_t)len);
-    o += sprintf(o, "\",\"output_modality\":\"text\"}");
+    o += sprintf(o, "\",\"output_modality\":\"text\",\"session_id\":\"" APPS_CHAT_SESSION_ID "\"}");
     j->len = (size_t)(o - j->body);
     heap_caps_free(message);
     int32_t op = muse_apps_op_begin(env, NULL, 0);

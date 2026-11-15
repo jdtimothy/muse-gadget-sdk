@@ -102,9 +102,17 @@ class Requests(unittest.TestCase):
         self.assertIn('"Range"', vm)
         self.assertIn('\\"overwrite\\":true,\\"append\\":false,\\"create_parent\\":true', files)
         chat = CHAT.read_text()
-        self.assertIn('"/chat/history?limit=1"', chat)          # one message fits a frame
+        self.assertIn('"/chat/history?limit=1&session_id=" APPS_CHAT_SESSION_ID', chat)          # one message fits a frame, from the apps side chat
         self.assertIn('"[%s on the gadget] %s"', chat)
         self.assertIn('"output_modality\\":\\"text\\"', chat)
+
+    def test_apps_chat_goes_to_the_gadget_apps_side_chat(self):
+        chat = CHAT.read_text()
+        # Apps route to the dedicated "Gadget Apps" side chat, not the main
+        # chat; voice notes/calls live in muse_chat_session.cpp, untouched.
+        self.assertIn('#define APPS_CHAT_SESSION_ID "6115bc95-4565-4474-add2-8cb7ba1c9463"', chat)
+        self.assertIn('APPS_CHAT_SUBSCRIBE_BODY, chat_frame', function(chat, "static void chat_connect("))
+        self.assertIn('\\"session_id\\":\\"" APPS_CHAT_SESSION_ID "\\"', function(chat, "int32_t gadget_chat_send("))
 
     def test_permissions(self):
         chat = CHAT.read_text()
